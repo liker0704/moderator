@@ -1,0 +1,22 @@
+# Python dependencies for moderator backend
+
+# Discord Gateway integration
+websockets>=12.0
+aiohttp>=3.9.0
+
+# Telegram Bot API
+python-telegram-bot>=20.0
+
+# Database
+asyncpg>=0.29.0
+psycopg2-binary>=2.9.9
+SQLAlchemy>=2.0.0
+
+# Encryption for storing Discord token
+cryptography>=41.0.0
+
+# Environment variables
+python-dotenv>=1.0.0
+
+# Utilities
+python-dateutil>=2.8.2

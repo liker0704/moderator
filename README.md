@@ -1,93 +1,1148 @@
-# TG-консоль модератора для Discord ↔ Telegram
+# Discord ↔ Telegram Moderator Console
 
-Версия: 1.0
-Дата: 16.11.2025
+> A unified Telegram-based console for moderating Discord and Telegram messages
 
-## Описание
+**Version**: MVP v0.1
+**Status**: In Development
+**Last Updated**: November 17, 2025
 
-Сервис предоставляет модератору единую консоль в Telegram (бот), куда поступают входящие сообщения из Discord и Telegram. Модератор может отвечать на сообщения через единый интерфейс с подтверждением отправки.
+---
 
-### Основные возможности
+## Table of Contents
 
-- Прием сообщений из Discord через прямое подключение пользовательского аккаунта к Gateway
-- Прием личных сообщений из Telegram
-- Единая консоль для ответов через Telegram-бот
-- Карточки сообщений с метаданными и контекстом
-- Обязательное подтверждение перед отправкой ответа
-- Режим "Не беспокоить" (DND) с гибкими интервалами
-- Поддержка изображений и скриншотов
-- AI-генерация вариантов ответов (v0.2+)
-- Хранение данных 90 дней
+- [Project Overview](#project-overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Running the Application](#running-the-application)
+- [First-Time Setup](#first-time-setup)
+- [Usage](#usage)
+- [Troubleshooting](#troubleshooting)
+- [Project Structure](#project-structure)
+- [Development](#development)
+- [Testing](#testing)
+- [Documentation](#documentation)
+- [Roadmap](#roadmap)
+- [Important Warnings](#important-warnings)
+- [License and Contact](#license-and-contact)
 
-## Целевая аудитория
+---
 
-Система разработана для одного модератора (единственный пользователь).
+## Project Overview
 
-## Технический стек
+This service provides a unified Telegram bot console for moderators to manage incoming messages from Discord and Telegram. The moderator receives message cards with context and can respond through a single interface with mandatory confirmation before sending.
 
-- Backend: Python/Node.js (определяется при реализации)
-- База данных: PostgreSQL
-- Интеграции: Discord Gateway (User Token), Telegram Bot API
-- Деплой: Docker
-- LLM: OpenAI API / Anthropic Claude (v0.2+)
+### Purpose
 
-## Структура документации
+Centralize moderation workflows by:
+- Aggregating messages from Discord (via User Gateway) and Telegram (via Bot API)
+- Providing rich context for each message
+- Requiring explicit confirmation before posting responses
+- Supporting "Do Not Disturb" mode with flexible scheduling
+- Handling images and attachments
 
-- [Архитектура системы](docs/ARCHITECTURE.md) - компоненты и потоки данных
-- [Требования](docs/REQUIREMENTS.md) - функциональные и нефункциональные требования
-- [База данных](docs/DATABASE.md) - схема и политики хранения
-- [API и интеграции](docs/API.md) - внутренние контракты и API
-- [Discord интеграция](docs/DISCORD_INTEGRATION.md) - подключение к Discord Gateway
-- [Telegram интеграция](docs/TELEGRAM_INTEGRATION.md) - работа с Telegram Bot API
-- [LLM интеграция](docs/LLM_INTEGRATION.md) - генерация вариантов ответов
-- [Развертывание](docs/DEPLOYMENT.md) - инструкции по деплою
-- [Руководство пользователя](docs/USER_GUIDE.md) - команды и работа с ботом
-- [Тестирование](docs/TESTING.md) - план и кейсы тестирования
-- [Roadmap](docs/ROADMAP.md) - план разработки по версиям
-- [Риски](docs/RISKS.md) - риски и меры по их обходу
+### Target Audience
 
-## Быстрый старт
+This system is designed for a **single moderator** (single-user system).
 
-1. Настроить переменные окружения (см. [DEPLOYMENT.md](docs/DEPLOYMENT.md))
-2. Запустить через Docker Compose
-3. Настроить Discord подключение через команду /setup_discord
-4. Настроить allowlist каналов через /allow_channel
-5. Начать работу
+---
 
-## Версии
+## Features
 
-### MVP v0.1 (текущая)
-- Базовый ингест Discord и Telegram
-- Карточки с контекстом
-- Ответы с подтверждением
-- DND режим
-- Поддержка изображений
+### MVP v0.1 Features
 
-### v0.2 (планируется)
-- LLM генерация вариантов ответов
-- Функция "Смягчить/вежливо"
-- Напоминания о висящих карточках
-- Команды управления allowlist
+✅ **Core Functionality**
+- Discord message ingestion via User Gateway connection
+- Telegram DM ingestion via Bot API
+- Unified console for responses through Telegram bot
+- Message cards with metadata and conversation context
 
-### v1.0 (финальная)
-- Мультисерверность
-- Редактирование отправленных сообщений
-- Поиск по истории
-- Базовые метрики
-- Шаблоны быстрых ответов
+✅ **Safety & Control**
+- Mandatory confirmation before sending any response
+- "Undo" prevention through confirmation workflow
+- Error handling with retry mechanisms
 
-## Важные замечания
+✅ **Convenience**
+- "Do Not Disturb" (DND) mode with flexible time intervals
+- Context expansion ("Show More" button for message history)
+- Channel allowlist management
 
-⚠️ **ВНИМАНИЕ**: Проект использует прямое подключение пользовательского аккаунта к Discord Gateway, что нарушает Terms of Service Discord. Использование на свой риск.
+✅ **Media Support**
+- Image and screenshot support from both platforms
+- Attachment display in message cards
+- Clickable links with preview disabled
 
-- Формат ответов: только чистый текст (без Markdown)
-- Хранение: 90 дней, без бэкапов (осознанное решение)
-- Единственный пользователь: система не поддерживает несколько модераторов
+✅ **Data Management**
+- 90-day data retention policy
+- Automatic cleanup of old messages
+- Encrypted storage of Discord token
 
-## Лицензия
+### Planned Features
 
-Частный проект
+**v0.2** (Coming Soon)
+- AI-powered response suggestions (OpenAI/Anthropic)
+- "Soften/Politeness" function for responses
+- Reminders for pending message cards
+- Enhanced allowlist management commands
 
-## Контакты
+**v1.0** (Future)
+- Multi-server support
+- Edit sent messages
+- Search through history
+- Basic metrics and analytics
+- Quick reply templates
 
-[Указать контактную информацию]
+See [ROADMAP.md](docs/ROADMAP.md) for detailed version plans.
+
+---
+
+## Architecture
+
+### High-Level Overview
+
+```
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│  Discord        │         │   Moderator      │         │   Telegram      │
+│  Servers        │────────▶│   Console        │◀────────│   Users         │
+│  (Gateway)      │         │   (TG Bot)       │         │   (DM only)     │
+└─────────────────┘         └──────────────────┘         └─────────────────┘
+                                     │
+                                     │
+                            ┌────────▼────────┐
+                            │   Backend       │
+                            │   Services      │
+                            └────────┬────────┘
+                                     │
+                     ┌───────────────┼───────────────┐
+                     │               │               │
+            ┌────────▼────────┐ ┌───▼────┐ ┌───────▼────────┐
+            │  Discord Ingest │ │   DB   │ │ Telegram Ingest│
+            │  (User Gateway) │ │  (PG)  │ │  (Bot API)     │
+            └─────────────────┘ └────────┘ └────────────────┘
+```
+
+### Technology Stack
+
+- **Backend**: Python 3.11+ or Node.js 18+
+- **Database**: PostgreSQL 15+
+- **Cache/Queues**: Redis 7+ (v0.2+)
+- **Integrations**: Discord Gateway (User Token), Telegram Bot API
+- **Deployment**: Docker Compose
+- **LLM**: OpenAI API / Anthropic Claude (v0.2+)
+
+📖 For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+
+---
+
+## Quick Start
+
+Get up and running in 5 minutes:
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/moderator.git
+cd moderator
+
+# 2. Copy and configure environment variables
+cp .env.example .env
+nano .env  # Edit with your tokens and keys
+
+# 3. Start the services
+docker compose up -d
+
+# 4. Check logs
+docker compose logs -f backend
+
+# 5. Start the Telegram bot and run /start
+```
+
+Then complete the [First-Time Setup](#first-time-setup) to configure Discord connection and allowlist.
+
+---
+
+## Requirements
+
+### System Requirements
+
+**Minimum**
+- CPU: 1 core
+- RAM: 512 MB
+- Disk: 5 GB
+- OS: Linux (Ubuntu 20.04+, Debian 11+)
+
+**Recommended**
+- CPU: 2 cores
+- RAM: 2 GB
+- Disk: 20 GB (SSD preferred)
+- OS: Ubuntu 22.04 LTS
+
+### Software Requirements
+
+- **Docker**: 20.10+ with Docker Compose plugin
+- **Git**: For cloning the repository
+- **Text Editor**: For configuration files
+
+### API Keys Required
+
+1. **Telegram Bot Token** - From [@BotFather](https://t.me/botfather)
+2. **Discord User Token** - From your Discord account (see [First-Time Setup](#first-time-setup))
+3. **Telegram User ID** - Your personal Telegram ID (get from [@userinfobot](https://t.me/userinfobot))
+4. **OpenAI/Anthropic API Key** - Optional, for v0.2+ AI features
+
+---
+
+## Installation
+
+### Step 1: Install Docker
+
+#### Ubuntu/Debian
+
+```bash
+# Update package index
+sudo apt update
+sudo apt upgrade -y
+
+# Install dependencies
+sudo apt install -y apt-transport-https ca-certificates curl software-properties-common
+
+# Add Docker GPG key
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+# Add Docker repository
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install Docker
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Verify installation
+docker --version
+docker compose version
+```
+
+#### Add User to Docker Group
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Test Docker without sudo
+docker ps
+```
+
+### Step 2: Clone Repository
+
+```bash
+git clone https://github.com/your-org/moderator.git
+cd moderator
+```
+
+### Step 3: Verify Project Structure
+
+```bash
+ls -la
+# Should see: README.md, docker-compose.yml, .env.example, backend/, docs/, migrations/
+```
+
+---
+
+## Configuration
+
+### Environment Variables
+
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your configuration:
+
+```bash
+nano .env
+```
+
+### Required Variables
+
+```bash
+# ============================================
+# Database Configuration
+# ============================================
+DB_NAME=moderator_db
+DB_USER=moderator
+DB_PASSWORD=your_secure_password_here  # CHANGE THIS!
+
+# ============================================
+# Telegram Bot Configuration
+# ============================================
+# Get bot token from @BotFather
+TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+
+# Get your user ID from @userinfobot
+MODERATOR_TG_USER_ID=987654321
+
+# ============================================
+# Encryption Configuration
+# ============================================
+# Generate with: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+ENCRYPTION_KEY=your_fernet_encryption_key_here
+
+# ============================================
+# Alert Configuration
+# ============================================
+# Telegram Chat ID for system alerts (can be same as MODERATOR_TG_USER_ID)
+ALERT_CHAT_ID=987654321
+
+# ============================================
+# Logging Configuration
+# ============================================
+LOG_LEVEL=INFO  # DEBUG for development, INFO for production
+```
+
+### Optional Variables (v0.2+)
+
+```bash
+# ============================================
+# LLM Configuration (v0.2+)
+# ============================================
+LLM_PROVIDER=openai  # or 'anthropic'
+OPENAI_API_KEY=sk-your_openai_api_key_here
+LLM_MODEL=gpt-4-turbo
+```
+
+### Generate Encryption Key
+
+The encryption key is used to securely store your Discord token in the database.
+
+**Method 1 - Python:**
+```bash
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+**Method 2 - OpenSSL:**
+```bash
+openssl rand -base64 32
+```
+
+Copy the output and paste it as `ENCRYPTION_KEY` in your `.env` file.
+
+### Secure Your Configuration
+
+```bash
+# Set proper permissions (important!)
+chmod 600 .env
+
+# Verify
+ls -la .env
+# Should show: -rw------- (only owner can read/write)
+```
+
+---
+
+## Running the Application
+
+### Start Services
+
+```bash
+# Build and start all services
+docker compose up -d
+
+# View logs (follow mode)
+docker compose logs -f backend
+
+# View logs (last 100 lines)
+docker compose logs --tail=100 backend
+
+# Check service status
+docker compose ps
+```
+
+Expected output:
+```
+NAME                 IMAGE               STATUS              PORTS
+moderator_backend    moderator-backend   Up 2 minutes        0.0.0.0:8000->8000/tcp
+moderator_db         postgres:15-alpine  Up 2 minutes        127.0.0.1:5432->5432/tcp
+```
+
+### Stop Services
+
+```bash
+# Stop all services
+docker compose stop
+
+# Stop and remove containers
+docker compose down
+
+# Stop and remove containers + volumes (WARNING: deletes database!)
+docker compose down -v
+```
+
+### Restart Services
+
+```bash
+# Restart all services
+docker compose restart
+
+# Restart only backend
+docker compose restart backend
+```
+
+### Update Application
+
+```bash
+# Pull latest code
+git pull
+
+# Rebuild and restart
+docker compose build backend
+docker compose up -d backend
+
+# Check logs
+docker compose logs -f backend
+```
+
+---
+
+## First-Time Setup
+
+After starting the services, complete these setup steps:
+
+### Step 1: Start the Bot
+
+1. Open Telegram and find your bot (using the link from BotFather)
+2. Send `/start` to the bot
+3. The bot should respond with a welcome message
+
+### Step 2: Configure Discord Connection
+
+Send the `/setup_discord` command to the bot.
+
+#### How to Get Discord User Token
+
+⚠️ **WARNING**: This is your personal Discord account token. Never share it with anyone!
+
+1. Open Discord Web at https://discord.com/app in your browser
+2. Log in to your Discord account
+3. Open Developer Tools (Press `F12`)
+4. Go to the **Console** tab
+5. Paste this code and press Enter:
+
+```javascript
+(webpackChunkdiscord_app.push([[''],{},e=>{m=[];for(let c in e.c)m.push(e.c[c])}]),m).find(m=>m?.exports?.default?.getToken!==void 0).exports.default.getToken()
+```
+
+6. Copy the token (long string) that appears
+7. Send the token to the bot in Telegram
+
+The bot will:
+- Encrypt and store the token securely in the database
+- Attempt to connect to Discord Gateway
+- Confirm successful connection or show an error
+
+### Step 3: Verify Connection
+
+Send `/test_connection` to verify Discord is connected:
+
+Expected response:
+```
+✅ Connection to Discord active
+Connected to 3 servers
+Last message: 2 minutes ago
+```
+
+### Step 4: Add Channels to Allowlist
+
+To receive messages from specific Discord channels, add them to the allowlist:
+
+#### Get Channel IDs
+
+1. In Discord, enable Developer Mode:
+   - Settings → Advanced → Developer Mode (toggle ON)
+
+2. Right-click on a server → Copy Server ID
+3. Right-click on a channel → Copy Channel ID
+
+#### Add to Allowlist
+
+Send this command to the bot:
+
+```
+/allow_channel 111111111111111111 222222222222222222
+```
+
+Where:
+- `111111111111111111` = Server ID
+- `222222222222222222` = Channel ID
+
+Expected response:
+```
+✅ Channel #general added to allowlist
+Server: My Discord Server
+```
+
+Repeat for all channels you want to monitor.
+
+### Step 5: Test the System
+
+1. Send a message in one of your allowlisted Discord channels
+2. You should receive a message card in Telegram within seconds
+3. Try responding to test the full workflow
+
+---
+
+## Usage
+
+### Message Cards
+
+When a new message arrives, you'll receive a card in Telegram:
+
+```
+📝 Discord • My Server • #general • @username • 12:34:56
+
+Context:
+[12:30] user1: Previous message
+[12:32] user2: Another message
+[12:34] username: Current message text here
+
+[Reply] [Show More] [DND]
+```
+
+### Replying to Messages
+
+1. Click **[Reply]** button
+2. Type your response (plain text only, no Markdown)
+3. Review the confirmation:
+   ```
+   Your response:
+   "Your message text"
+
+   [Confirm] [Cancel]
+   ```
+4. Click **[Confirm]** to send
+5. The card updates to show success:
+   ```
+   ✅ Sent to #general at 12:35:20
+   ```
+
+### Bot Commands
+
+#### Setup & Status
+
+| Command | Description |
+|---------|-------------|
+| `/start` | Start the bot and show welcome message |
+| `/help` | Show all available commands |
+| `/setup_discord` | Configure Discord User Token |
+| `/test_connection` | Test Discord connection |
+| `/discord_status` | Show detailed Discord connection status |
+| `/status` | Show overall system status |
+
+#### Do Not Disturb (DND)
+
+| Command | Description |
+|---------|-------------|
+| `/dnd on` | Enable DND mode (stop receiving cards) |
+| `/dnd off` | Disable DND mode (resume receiving cards) |
+| `/dnd` | Configure DND schedule |
+
+**DND Example:**
+```
+# Turn on manually
+/dnd on
+
+# Configure schedule
+/dnd
+→ Set schedule: Weekdays 22:00-08:00
+→ DND automatically activates/deactivates
+```
+
+#### Channel Management
+
+| Command | Description |
+|---------|-------------|
+| `/allow_channel {server_id} {channel_id}` | Add channel to allowlist |
+| `/unallow_channel {channel_id}` | Remove channel from allowlist |
+| `/settings` | View current settings and allowlist |
+
+### Common Workflows
+
+#### Workflow 1: Respond to a Discord Message
+
+1. Receive card in Telegram
+2. Read context (click "Show More" if needed)
+3. Click "Reply"
+4. Type your response
+5. Confirm
+6. Message sent to Discord
+
+#### Workflow 2: Enable DND for the Night
+
+```
+# Before bed
+/dnd on
+
+# Next morning
+/dnd off
+```
+
+Or set up automatic schedule:
+```
+/dnd
+→ Configure: Mon-Fri 22:00-08:00
+→ Auto-enable/disable daily
+```
+
+#### Workflow 3: Add a New Channel
+
+```
+# In Discord: Enable Developer Mode
+# Right-click server → Copy Server ID
+# Right-click channel → Copy Channel ID
+
+# In Telegram:
+/allow_channel 111111111111111111 222222222222222222
+
+# Start receiving messages from that channel
+```
+
+📖 For detailed usage instructions, see [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+
+---
+
+## Troubleshooting
+
+### Backend Not Starting
+
+**Check logs:**
+```bash
+docker compose logs backend
+```
+
+**Check environment variables:**
+```bash
+docker compose exec backend env | grep -E "DB_|TELEGRAM_"
+```
+
+**Common issues:**
+- Missing or incorrect `TELEGRAM_BOT_TOKEN`
+- Database password mismatch
+- Port 8000 already in use
+
+### Database Connection Failed
+
+**Check database status:**
+```bash
+docker compose ps db
+docker compose logs db
+```
+
+**Connect to database manually:**
+```bash
+docker exec -it moderator_db psql -U moderator -d moderator_db
+```
+
+**Fix:**
+- Verify `DB_PASSWORD` in `.env`
+- Restart database: `docker compose restart db`
+
+### Telegram Bot Not Responding
+
+**Check if bot token is valid:**
+```bash
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe"
+```
+
+**Check for active webhooks:**
+```bash
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getWebhookInfo"
+```
+
+**Remove webhook if exists:**
+```bash
+curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/deleteWebhook"
+```
+
+**Restart backend:**
+```bash
+docker compose restart backend
+```
+
+### Discord Not Connecting
+
+1. **Test connection:**
+   - Send `/test_connection` to the bot
+
+2. **Common issues:**
+   - Token expired → Re-run `/setup_discord`
+   - Invalid token → Get new token from Discord
+   - Super properties outdated → Update in code
+
+3. **Check logs for Discord errors:**
+   ```bash
+   docker compose logs backend | grep -i discord
+   ```
+
+### No Message Cards Arriving
+
+**Checklist:**
+- [ ] Discord connection active? (`/test_connection`)
+- [ ] Channel in allowlist? (`/settings`)
+- [ ] DND mode off? (`/dnd off`)
+- [ ] Messages sent in allowed channel?
+- [ ] Backend running? (`docker compose ps`)
+
+**Debug:**
+```bash
+# Check backend logs
+docker compose logs -f backend
+
+# Check database for messages
+docker exec -it moderator_db psql -U moderator -d moderator_db
+SELECT COUNT(*) FROM messages WHERE created_at > NOW() - INTERVAL '1 hour';
+```
+
+### Response Not Sending
+
+**Check error message in the card:**
+- **Missing Access** - No permission in Discord channel
+- **Invalid Token** - Discord token expired (run `/setup_discord`)
+- **Channel Not Found** - Channel deleted or unavailable
+- **Rate Limited** - Too many requests (wait a moment)
+
+**Retry:**
+1. Fix the underlying issue
+2. Click **[Retry]** button on the card
+
+### High Resource Usage
+
+**Check Docker stats:**
+```bash
+docker stats
+```
+
+**Limit resources in docker-compose.yml:**
+```yaml
+services:
+  backend:
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+```
+
+📖 For more troubleshooting help, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#troubleshooting)
+
+---
+
+## Project Structure
+
+```
+moderator/
+├── README.md                   # This file
+├── docker-compose.yml          # Docker services configuration
+├── .env.example                # Environment variables template
+├── .env                        # Your configuration (create from .env.example)
+│
+├── backend/                    # Application code
+│   ├── Dockerfile              # Backend container definition
+│   ├── requirements.txt        # Python dependencies (or package.json for Node.js)
+│   └── src/                    # Source code
+│       ├── main.py             # Application entry point
+│       ├── discord/            # Discord integration
+│       │   ├── gateway.py      # WebSocket Gateway client
+│       │   ├── ingest.py       # Message ingestion
+│       │   └── poster.py       # Response posting
+│       ├── telegram/           # Telegram integration
+│       │   ├── bot.py          # Bot handlers
+│       │   ├── ingest.py       # DM ingestion
+│       │   └── poster.py       # Response posting
+│       ├── llm/                # LLM integration (v0.2+)
+│       │   ├── client.py       # OpenAI/Anthropic clients
+│       │   └── generator.py    # Response generation
+│       ├── models/             # Database models
+│       │   └── db.py           # ORM models
+│       └── utils/              # Utilities
+│           ├── encryption.py   # Token encryption
+│           ├── logger.py       # Logging setup
+│           └── config.py       # Configuration loading
+│
+├── migrations/                 # Database migrations
+│   ├── README.md              # Migration instructions
+│   └── 001_initial_schema.sql # Initial database schema
+│
+├── docs/                       # Documentation
+│   ├── ARCHITECTURE.md         # System architecture
+│   ├── API.md                  # Internal APIs
+│   ├── DATABASE.md             # Database schema
+│   ├── DEPLOYMENT.md           # Deployment guide
+│   ├── DISCORD_INTEGRATION.md  # Discord integration details
+│   ├── TELEGRAM_INTEGRATION.md # Telegram integration details
+│   ├── LLM_INTEGRATION.md      # LLM integration (v0.2+)
+│   ├── USER_GUIDE.md           # User guide for moderators
+│   ├── TESTING.md              # Testing plan
+│   ├── REQUIREMENTS.md         # Functional requirements
+│   ├── RISKS.md                # Risk analysis
+│   └── ROADMAP.md              # Development roadmap
+│
+└── tests/                      # Test files (if implemented)
+    ├── test_discord.py
+    ├── test_telegram.py
+    └── test_integration.py
+```
+
+---
+
+## Development
+
+### Local Development Setup
+
+#### Option 1: Docker Development
+
+```bash
+# Use development docker-compose with volume mounting
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+# Code changes in backend/src/ are reflected immediately
+# No need to rebuild for Python/Node.js changes
+```
+
+#### Option 2: Local Python Development
+
+```bash
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r backend/requirements.txt
+
+# Set up environment variables
+export $(cat .env | xargs)
+
+# Run application
+python backend/src/main.py
+```
+
+### Code Structure Guidelines
+
+**Python Example:**
+```python
+# backend/src/discord/gateway.py
+import asyncio
+import websockets
+
+class DiscordGateway:
+    """Discord WebSocket Gateway client."""
+
+    def __init__(self, token: str):
+        self.token = token
+        self.ws = None
+
+    async def connect(self):
+        """Establish WebSocket connection."""
+        # Implementation...
+```
+
+### Database Migrations
+
+**Create new migration:**
+```bash
+# Create file: migrations/002_add_feature.sql
+# Add your SQL:
+ALTER TABLE messages ADD COLUMN is_edited BOOLEAN DEFAULT FALSE;
+```
+
+**Apply migration:**
+```bash
+docker exec -i moderator_db psql -U moderator -d moderator_db < migrations/002_add_feature.sql
+```
+
+### Logging
+
+All logs go to stdout/stderr and can be viewed with:
+
+```bash
+docker compose logs -f backend
+```
+
+**Log levels:**
+- `DEBUG` - Detailed information for debugging
+- `INFO` - General information (default)
+- `WARNING` - Warning messages
+- `ERROR` - Error messages
+- `CRITICAL` - Critical errors
+
+Set level in `.env`:
+```bash
+LOG_LEVEL=DEBUG  # For development
+LOG_LEVEL=INFO   # For production
+```
+
+### Adding New Features
+
+1. **Create feature branch:**
+   ```bash
+   git checkout -b feature/my-feature
+   ```
+
+2. **Implement feature** in `backend/src/`
+
+3. **Add tests** in `tests/`
+
+4. **Update documentation** in `docs/`
+
+5. **Test locally:**
+   ```bash
+   docker compose build backend
+   docker compose up -d backend
+   docker compose logs -f backend
+   ```
+
+6. **Commit and push:**
+   ```bash
+   git add .
+   git commit -m "Add my feature"
+   git push origin feature/my-feature
+   ```
+
+---
+
+## Testing
+
+### Manual Testing
+
+**Test checklist:**
+- [ ] Backend starts without errors
+- [ ] Database migrations applied
+- [ ] Telegram bot responds to `/start`
+- [ ] Discord connection established
+- [ ] Message cards appear in Telegram
+- [ ] Responses send successfully
+- [ ] DND mode works
+- [ ] Allowlist management works
+
+### Unit Tests
+
+```bash
+# Run tests (when implemented)
+docker compose exec backend pytest tests/
+
+# Run with coverage
+docker compose exec backend pytest --cov=src tests/
+```
+
+### Integration Tests
+
+```bash
+# Test Discord connection
+docker compose exec backend python -m tests.test_discord_connection
+
+# Test Telegram bot
+docker compose exec backend python -m tests.test_telegram_bot
+
+# Test full workflow
+docker compose exec backend python -m tests.test_integration
+```
+
+### Database Tests
+
+```bash
+# Connect to database
+docker exec -it moderator_db psql -U moderator -d moderator_db
+
+# Run test queries
+SELECT COUNT(*) FROM messages;
+SELECT COUNT(*) FROM tasks WHERE status = 'open';
+SELECT * FROM platform_accounts LIMIT 1;
+```
+
+📖 For detailed testing plan, see [docs/TESTING.md](docs/TESTING.md)
+
+---
+
+## Documentation
+
+### Available Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | System architecture and components |
+| [REQUIREMENTS.md](docs/REQUIREMENTS.md) | Functional and non-functional requirements |
+| [DATABASE.md](docs/DATABASE.md) | Database schema and policies |
+| [API.md](docs/API.md) | Internal contracts and APIs |
+| [DISCORD_INTEGRATION.md](docs/DISCORD_INTEGRATION.md) | Discord Gateway integration details |
+| [TELEGRAM_INTEGRATION.md](docs/TELEGRAM_INTEGRATION.md) | Telegram Bot API integration |
+| [LLM_INTEGRATION.md](docs/LLM_INTEGRATION.md) | AI response generation (v0.2+) |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment and operations guide |
+| [USER_GUIDE.md](docs/USER_GUIDE.md) | User guide for moderators |
+| [TESTING.md](docs/TESTING.md) | Testing plan and test cases |
+| [ROADMAP.md](docs/ROADMAP.md) | Development roadmap by version |
+| [RISKS.md](docs/RISKS.md) | Risk analysis and mitigation |
+
+### Quick Links
+
+- **Getting Started**: [Quick Start](#quick-start)
+- **Setup Guide**: [First-Time Setup](#first-time-setup)
+- **User Manual**: [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
+- **Deployment**: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- **Troubleshooting**: [Troubleshooting](#troubleshooting)
+
+---
+
+## Roadmap
+
+### Current Version: MVP v0.1
+
+**Status**: In Development
+
+**Core Features:**
+- ✅ Discord ingestion (User Gateway)
+- ✅ Telegram ingestion (Bot API)
+- ✅ Message cards with context
+- ✅ Response confirmation workflow
+- ✅ DND mode
+- ✅ Media support
+- ⏳ Testing and deployment
+
+### Upcoming Versions
+
+**v0.2 - AI & Convenience** (2-3 weeks after v0.1)
+- LLM-powered response suggestions
+- "Soften/Politeness" function
+- Queue system (Redis)
+- Reminders for pending messages
+- Enhanced allowlist commands
+
+**v1.0 - Full Feature Set** (3-4 months total)
+- Multi-server support
+- Edit sent messages
+- Search message history
+- Analytics and metrics
+- Quick reply templates
+- Health check endpoints
+
+📖 For detailed roadmap, see [docs/ROADMAP.md](docs/ROADMAP.md)
+
+---
+
+## Important Warnings
+
+### ⚠️ Discord Terms of Service Violation
+
+**CRITICAL WARNING**: This project uses direct connection to Discord Gateway via a **User Token** (not a Bot Token). This practice **violates Discord's Terms of Service**.
+
+**Risks:**
+- Account suspension or permanent ban
+- Loss of access to Discord account
+- Potential legal action by Discord
+
+**Why we use this approach:**
+- Discord Bot API does not allow reading messages without `MESSAGE_CONTENT` privileged intent
+- Bot API privileged intents are not available for user-created bots in DMs
+- User Gateway provides full message access needed for moderation
+
+**Mitigation strategies:**
+- Use a dedicated Discord account (not your main account)
+- Monitor for changes in Discord's detection methods
+- Be prepared to switch to Bot API if Discord adds necessary features
+- Keep backup of important Discord data
+
+**Use at your own risk!**
+
+### 🔒 Security Considerations
+
+1. **Never share your tokens:**
+   - Discord User Token
+   - Telegram Bot Token
+   - Encryption keys
+   - Database passwords
+
+2. **Secure your `.env` file:**
+   ```bash
+   chmod 600 .env
+   ```
+
+3. **If tokens are compromised:**
+   - Discord: Change password, logout all sessions, get new token
+   - Telegram: Revoke bot token via @BotFather, create new bot
+   - Database: Change passwords and restart services
+
+4. **Regular updates:**
+   - Keep Docker images updated
+   - Update dependencies regularly
+   - Monitor security advisories
+
+### 📝 Data Retention
+
+- Messages stored for **90 days** only
+- Automatic cleanup (no manual intervention needed)
+- **No backups** by default (design decision)
+- If you need backups, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#backups)
+
+### 👤 Single User Only
+
+This system supports **one moderator only**. It is not designed for:
+- Multiple moderators
+- Team collaboration
+- Role-based access control
+
+---
+
+## License and Contact
+
+### License
+
+**Private Project** - Not licensed for public use
+
+This is a personal/private project. All rights reserved.
+
+### Contact
+
+For questions, issues, or contributions:
+
+- **Repository**: [GitHub Repository URL]
+- **Issues**: [GitHub Issues URL]
+- **Email**: [Your contact email]
+- **Telegram**: [Your Telegram handle]
+
+### Contributing
+
+This is a single-user system, but if you'd like to contribute:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+5. Wait for review
+
+### Acknowledgments
+
+- Discord.js community for Gateway protocol documentation
+- Telegram Bot API documentation
+- PostgreSQL and Docker communities
+
+---
+
+## Support
+
+If you encounter issues:
+
+1. Check [Troubleshooting](#troubleshooting) section
+2. Review [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+3. Check application logs: `docker compose logs -f backend`
+4. Search existing issues on GitHub
+5. Create a new issue with:
+   - Description of the problem
+   - Steps to reproduce
+   - Relevant log excerpts
+   - Your environment (OS, Docker version, etc.)
+
+---
+
+**Built with ❤️ for efficient moderation workflows**
+
+*Last Updated: November 17, 2025*
