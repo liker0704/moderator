@@ -15,11 +15,14 @@ Features:
 
 import asyncio
 import logging
+import time
 from typing import List, Dict, Optional, Literal, Any
 from datetime import datetime
 import aiohttp
 
 from config import get_config
+from database.connection import get_asyncpg_pool
+from services.llm_monitoring import track_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,49 @@ class LLMClient:
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
+
+    async def _track_request(
+        self,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        duration_ms: int,
+        status: str = "success",
+        error_message: Optional[str] = None,
+        task_id: Optional[int] = None,
+        request_type: str = "generation"
+    ) -> None:
+        """
+        Track LLM request in monitoring system.
+
+        Args:
+            provider: LLM provider ('openai' or 'anthropic')
+            prompt_tokens: Number of input tokens
+            completion_tokens: Number of output tokens
+            duration_ms: Request duration in milliseconds
+            status: Request status ('success', 'error', 'timeout')
+            error_message: Error details if applicable
+            task_id: Associated task ID if applicable
+            request_type: Type of request ('generation', 'soften', etc.)
+        """
+        try:
+            pool = get_asyncpg_pool()
+            async with pool.acquire() as conn:
+                await track_llm_request(
+                    conn=conn,
+                    provider=provider,
+                    model=self.model,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    duration_ms=duration_ms,
+                    status=status,
+                    error_message=error_message,
+                    task_id=task_id,
+                    request_type=request_type
+                )
+        except Exception as e:
+            # Don't let tracking errors break the main flow
+            logger.warning(f"Failed to track LLM request: {e}")
 
     async def generate_response(
         self,
@@ -89,6 +135,9 @@ class OpenAIClient(LLMClient):
         Returns:
             List of variant dicts with keys: text, confidence, provider, model
         """
+        # Start timing
+        start_time = time.time()
+
         # Build system prompt
         system_prompt = self._build_system_prompt(tone)
 
@@ -127,21 +176,86 @@ Generate {max_variants} different response options."""
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=self.timeout)
                 ) as response:
+                    # Calculate duration
+                    duration_ms = int((time.time() - start_time) * 1000)
+
                     if response.status == 200:
                         data = await response.json()
+
+                        # Extract token usage
+                        usage = data.get("usage", {})
+                        prompt_tokens = usage.get("prompt_tokens", 0)
+                        completion_tokens = usage.get("completion_tokens", 0)
+
+                        # Track successful request
+                        await self._track_request(
+                            provider="openai",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            duration_ms=duration_ms,
+                            status="success"
+                        )
+
                         return self._parse_openai_response(data)
                     else:
                         error = await response.text()
                         logger.error(f"OpenAI API error {response.status}: {error}")
+
+                        # Track failed request
+                        await self._track_request(
+                            provider="openai",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            duration_ms=duration_ms,
+                            status="error",
+                            error_message=f"HTTP {response.status}: {error[:200]}"
+                        )
+
                         return []
         except asyncio.TimeoutError:
+            duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"OpenAI request timed out after {self.timeout}s")
+
+            # Track timeout
+            await self._track_request(
+                provider="openai",
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_ms=duration_ms,
+                status="timeout",
+                error_message=f"Request timed out after {self.timeout}s"
+            )
+
             return []
         except aiohttp.ClientError as e:
+            duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"OpenAI network error: {e}", exc_info=True)
+
+            # Track network error
+            await self._track_request(
+                provider="openai",
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_ms=duration_ms,
+                status="error",
+                error_message=f"Network error: {str(e)[:200]}"
+            )
+
             return []
         except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"OpenAI request failed: {e}", exc_info=True)
+
+            # Track general error
+            await self._track_request(
+                provider="openai",
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_ms=duration_ms,
+                status="error",
+                error_message=f"Unexpected error: {str(e)[:200]}"
+            )
+
             return []
 
     def _build_system_prompt(self, tone: Optional[str]) -> str:
@@ -234,6 +348,9 @@ class AnthropicClient(LLMClient):
         Returns:
             List of variant dicts with keys: text, confidence, provider, model
         """
+        # Start timing
+        start_time = time.time()
+
         # Build system prompt
         system_prompt = self._build_system_prompt(tone)
 
@@ -272,21 +389,86 @@ Generate {max_variants} different response options, separated by '---'."""
                     json=payload,
                     timeout=aiohttp.ClientTimeout(total=self.timeout)
                 ) as response:
+                    # Calculate duration
+                    duration_ms = int((time.time() - start_time) * 1000)
+
                     if response.status == 200:
                         data = await response.json()
+
+                        # Extract token usage
+                        usage = data.get("usage", {})
+                        prompt_tokens = usage.get("input_tokens", 0)
+                        completion_tokens = usage.get("output_tokens", 0)
+
+                        # Track successful request
+                        await self._track_request(
+                            provider="anthropic",
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens,
+                            duration_ms=duration_ms,
+                            status="success"
+                        )
+
                         return self._parse_anthropic_response(data, max_variants)
                     else:
                         error = await response.text()
                         logger.error(f"Anthropic API error {response.status}: {error}")
+
+                        # Track failed request
+                        await self._track_request(
+                            provider="anthropic",
+                            prompt_tokens=0,
+                            completion_tokens=0,
+                            duration_ms=duration_ms,
+                            status="error",
+                            error_message=f"HTTP {response.status}: {error[:200]}"
+                        )
+
                         return []
         except asyncio.TimeoutError:
+            duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"Anthropic request timed out after {self.timeout}s")
+
+            # Track timeout
+            await self._track_request(
+                provider="anthropic",
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_ms=duration_ms,
+                status="timeout",
+                error_message=f"Request timed out after {self.timeout}s"
+            )
+
             return []
         except aiohttp.ClientError as e:
+            duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"Anthropic network error: {e}", exc_info=True)
+
+            # Track network error
+            await self._track_request(
+                provider="anthropic",
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_ms=duration_ms,
+                status="error",
+                error_message=f"Network error: {str(e)[:200]}"
+            )
+
             return []
         except Exception as e:
+            duration_ms = int((time.time() - start_time) * 1000)
             logger.error(f"Anthropic request failed: {e}", exc_info=True)
+
+            # Track general error
+            await self._track_request(
+                provider="anthropic",
+                prompt_tokens=0,
+                completion_tokens=0,
+                duration_ms=duration_ms,
+                status="error",
+                error_message=f"Unexpected error: {str(e)[:200]}"
+            )
+
             return []
 
     def _build_system_prompt(self, tone: Optional[str]) -> str:

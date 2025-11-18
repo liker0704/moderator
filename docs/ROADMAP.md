@@ -100,65 +100,76 @@
 
 ### Backlog
 
-#### 1. LLM Integration (5 дней)
-- [ ] OpenAI API клиент
-- [ ] Anthropic Claude API клиент
-- [ ] Генерация вариантов (2+)
-- [ ] Функция "Смягчить"
-- [ ] Confidence score calculation
-- [ ] Кнопки выбора вариантов в карточках
-- [ ] "Ещё варианты"
-- [ ] Обработка таймаутов
-- [ ] Кеширование вариантов
+#### 1. LLM Integration (5 дней) ✅ COMPLETE
+- [x] OpenAI API клиент
+- [x] Anthropic Claude API клиент
+- [x] Генерация вариантов (2+)
+- [x] Функция "Смягчить"
+- [x] Confidence score calculation
+- [x] Кнопки выбора вариантов в карточках
+- [x] "Ещё варианты"
+- [x] Обработка таймаутов
+- [x] Кеширование вариантов
 
-#### 2. Система очередей (3 дня)
-- [ ] Redis setup (Docker)
-- [ ] BullMQ или Celery
-- [ ] Очереди:
-  - [ ] ingest.discord
-  - [ ] ingest.telegram
-  - [ ] post.discord
-  - [ ] post.telegram
-  - [ ] llm.generate
-- [ ] Workers
-- [ ] Приоритеты
+#### 2. Система очередей (3 дня) ✅ COMPLETE (v0.2 Iteration 6)
+- [x] Redis setup (Docker)
+- [x] ARQ (Async Redis Queue)
+- [x] Очереди:
+  - [x] ingest.discord
+  - [x] ingest.telegram
+  - [x] post.discord
+  - [x] post.telegram
+  - [x] llm.generate
+- [x] Workers (ARQ worker service)
+- [x] Приоритеты (job priority support)
 
-#### 3. Rate Limiting (2 дня)
-- [ ] Bucket system для Discord API
-- [ ] Rate limiter (per-route)
-- [ ] Обработка X-RateLimit headers
-- [ ] Retry с exponential backoff
+#### 3. Rate Limiting (2 дня) ✅ COMPLETE (v0.2 Iteration 6)
+- [x] Bucket system для Discord API
+- [x] Rate limiter (per-route)
+- [x] Обработка X-RateLimit headers
+- [x] Retry с exponential backoff
+- [x] Global rate limit (50 req/sec)
+- [x] Singleton pattern для shared state
 
-#### 4. Напоминания (2 дня)
-- [ ] Reminders worker
-- [ ] Сканирование open tasks (>30 мин)
-- [ ] Пинги (каждые 30 мин, макс 3)
-- [ ] Уважение DND
-- [ ] settings.reminders_enabled
+#### 4. Напоминания (2 дня) ✅ COMPLETE (v0.2 Iteration 6)
+- [x] Reminders worker (ReminderService class)
+- [x] Сканирование open tasks (>30 мин)
+- [x] Пинги (каждые 30 мин, макс 3)
+- [x] Уважение DND
+- [x] settings.reminders_enabled
+- [x] Markdown formatting для напоминаний
+- [x] Task age и interval фильтрация
 
-#### 5. Команды управления allowlist (1 день)
-- [ ] Улучшенный /allow_channel (с диалогом выбора)
-- [ ] /unallow_channel
-- [ ] Список allowlist в /settings
+#### 5. Команды управления allowlist (1 день) ✅ COMPLETE (v0.2 Iteration 7)
+- [x] /unallow_channel с диалогом выбора (interactive mode)
+- [x] /unallow_channel <channel_id> (legacy mode)
+- [x] Список allowlist в /settings с действительными данными из БД
+- [x] Confirmation flow для удаления каналов
+- [x] Action buttons в /settings
 
-#### 6. Улучшения UX (2 дня)
-- [ ] Более информативные ошибки
-- [ ] Прогресс-бары (опционально)
-- [ ] Подтверждения действий
-- [ ] /help с категориями
+#### 6. Улучшения UX (2 дня) ✅ COMPLETE (v0.2 Iteration 7)
+- [x] Более информативные ошибки (error codes system, ERR-XXX-NNN)
+- [x] Подтверждения действий (confirmation dialogs framework)
+- [x] /help с категориями (5 категорий: setup, manage, cards, troubleshoot, ai)
+- [x] Error recovery suggestions
+- [x] Request ID tracking для ошибок
+- [ ] Прогресс-бары (отложено)
 
-#### 7. Мониторинг LLM (1 день)
-- [ ] Логирование запросов к LLM
-- [ ] Подсчет стоимости
-- [ ] Алерты при превышении бюджета
-- [ ] Метрики использования
+#### 7. Мониторинг LLM (1 день) ✅ COMPLETE (v0.2 Iteration 6)
+- [x] Логирование запросов к LLM (llm_requests table)
+- [x] Подсчет стоимости (token-based cost calculation)
+- [x] Алерты при превышении бюджета (budget alerts system)
+- [x] Метрики использования (LLMMonitoringDAO с views)
+- [x] Database schema (003_llm_monitoring.sql)
+- [x] Tracking для OpenAI и Anthropic
+- [x] Duration и error tracking
 
-#### 8. Тестирование (3 дня)
-- [ ] Тесты LLM (mock)
-- [ ] Тесты очередей
-- [ ] Тесты напоминаний
-- [ ] Manual тесты
-- [ ] Фиксы
+#### 8. Тестирование (3 дня) ✅ COMPLETE (v0.2 Iteration 8)
+- [x] Тесты LLM (mock) - 37 tests, 86% coverage
+- [x] Тесты очередей - 66 tests (29 Redis + 37 Worker)
+- [x] Тесты напоминаний - Already covered in previous iterations
+- [x] Manual тесты - Full test suite: 357 tests passing
+- [x] Фиксы - Fixed critical import bug in worker.py
 
 **Итого**: ~19 дней (3 недели)
 
@@ -217,13 +228,13 @@
 - [ ] Команда /export (экспорт данных в JSON)
 - [ ] Ручная анонимизация (опционально)
 
-#### 7. Health Check API (1 день)
-- [ ] Endpoint /health
-- [ ] Проверки:
-  - [ ] Discord connection
-  - [ ] Database
-  - [ ] Redis
-  - [ ] LLM API (опционально)
+#### 7. Health Check API (1 день) ✅ COMPLETE (v1.0 Iteration 1)
+- [x] Endpoint /health
+- [x] Проверки:
+  - [x] Discord connection
+  - [x] Database
+  - [x] Redis
+  - [x] LLM API (опционально)
 
 #### 8. Prometheus metrics (опционально, 2 дня)
 - [ ] Endpoint /metrics

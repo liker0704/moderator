@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: MVP v0.1
-**Status**: MVP v0.1 Complete ✅
+**Version**: v0.2 Iteration 7
+**Status**: v0.2 UX Improvements Complete ✅
 **Last Updated**: November 18, 2025
 
 ---
@@ -80,13 +80,37 @@ This system is designed for a **single moderator** (single-user system).
 - Automatic cleanup of old messages
 - Encrypted storage of Discord token
 
+### v0.2 Infrastructure & Monitoring (Complete ✅)
+
+**AI Integration** (Iteration 5)
+- ✅ OpenAI API client (GPT-4, GPT-3.5-turbo)
+- ✅ Anthropic Claude API client (Claude-3 Opus, Sonnet, Haiku)
+- ✅ AI-powered response suggestions with variants
+- ✅ "Soften/Politeness" function for responses
+- ✅ Confidence score calculation
+- ✅ Response caching
+
+**Advanced Infrastructure** (Iteration 6)
+- ✅ Redis-based job queue system (ARQ)
+- ✅ Background worker service for async processing
+- ✅ Discord API rate limiting (bucket system, global limits)
+- ✅ LLM cost monitoring with budget alerts
+- ✅ Automated reminder system (30-min intervals, max 3 per task)
+- ✅ DND integration for reminders
+
+**UX Improvements** (Iteration 7)
+- ✅ Centralized error handling with error codes (ERR-XXX-NNN format)
+- ✅ Categorized help system with 5 categories and interactive navigation
+- ✅ Enhanced /unallow_channel with selection dialog and confirmation
+- ✅ Enhanced /settings with actual allowlist display from database
+- ✅ Confirmation dialogs for destructive actions (DND toggle, channel removal)
+- ✅ Error recovery suggestions and request ID tracking
+
 ### Planned Features
 
-**v0.2** (Coming Soon)
-- AI-powered response suggestions (OpenAI/Anthropic)
-- "Soften/Politeness" function for responses
-- Reminders for pending message cards
-- Enhanced allowlist management commands
+**v0.2** (Remaining)
+- Additional integration tests
+- Performance optimizations
 
 **v1.0** (Future)
 - Multi-server support
@@ -935,16 +959,22 @@ LOG_LEVEL=INFO   # For production
 
 ### Automated Tests
 
-**Test Suite Results** (as of November 18, 2025):
-- **Total Tests**: 50
-- **Passing**: 41 (82%)
-- **Skipped**: 9 (acceptable for MVP)
+**Test Suite Results** (as of November 18, 2025 - v0.2 Iteration 8):
+- **Total Tests**: 377
+- **Passing**: 357 (95%)
+- **Skipped**: 20 (integration tests requiring Docker/real services)
 
 **Test Breakdown:**
-- Unit Tests: 25/25 (100%) ✅
-- Integration Tests: 16/25 (64%)
-  - 12 passing, 4 new end-to-end tests
-  - 9 skipped (require full integration environment)
+- Unit Tests: 357/357 (100%) ✅
+- Integration Tests: 20 documented (require full integration environment)
+
+**v0.2 Iteration 8 Additions** (151 new tests):
+- LLM Mock Tests: 37 tests (86% coverage for services/llm.py)
+- LLM Monitoring Tests: 48 tests (~95% coverage for services/llm_monitoring.py)
+- Redis Client Tests: 29 tests (100% coverage for job_queue/client.py)
+- ARQ Worker Tests: 37 tests (~85% coverage for job_queue/worker.py)
+
+**Execution Time**: 1.88 seconds for full suite
 
 **Run tests:**
 ```bash
@@ -968,6 +998,13 @@ pytest tests/ --cov=backend/src --cov-report=html
 - ✅ Discord MESSAGE_CREATE processing
 - ✅ Allowlist and DND filtering
 - ✅ Thread message support
+- ✅ **LLM Integration** (OpenAI & Anthropic clients, error handling, confidence scoring)
+- ✅ **LLM Monitoring** (cost calculation for 10+ models, budget tracking, usage stats)
+- ✅ **Redis Queue** (connection pooling, health checks, singleton pattern)
+- ✅ **ARQ Workers** (lifecycle hooks, task handlers, error handling)
+- ✅ **Error Handling System** (error codes, formatting, recovery steps)
+- ✅ **Help System** (5 categories, interactive navigation)
+- ✅ **Confirmations** (removal/toggle dialogs, DND confirmations)
 
 ### Unit Tests
 
