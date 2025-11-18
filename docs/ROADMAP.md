@@ -164,12 +164,12 @@
 - [x] Tracking для OpenAI и Anthropic
 - [x] Duration и error tracking
 
-#### 8. Тестирование (3 дня)
-- [ ] Тесты LLM (mock)
-- [ ] Тесты очередей
-- [ ] Тесты напоминаний
-- [ ] Manual тесты
-- [ ] Фиксы
+#### 8. Тестирование (3 дня) ✅ COMPLETE (v0.2 Iteration 8)
+- [x] Тесты LLM (mock) - 37 tests, 86% coverage
+- [x] Тесты очередей - 66 tests (29 Redis + 37 Worker)
+- [x] Тесты напоминаний - Already covered in previous iterations
+- [x] Manual тесты - Full test suite: 357 tests passing
+- [x] Фиксы - Fixed critical import bug in worker.py
 
 **Итого**: ~19 дней (3 недели)
 

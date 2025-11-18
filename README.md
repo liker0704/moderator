@@ -959,16 +959,22 @@ LOG_LEVEL=INFO   # For production
 
 ### Automated Tests
 
-**Test Suite Results** (as of November 18, 2025):
-- **Total Tests**: 50
-- **Passing**: 41 (82%)
-- **Skipped**: 9 (acceptable for MVP)
+**Test Suite Results** (as of November 18, 2025 - v0.2 Iteration 8):
+- **Total Tests**: 377
+- **Passing**: 357 (95%)
+- **Skipped**: 20 (integration tests requiring Docker/real services)
 
 **Test Breakdown:**
-- Unit Tests: 25/25 (100%) ✅
-- Integration Tests: 16/25 (64%)
-  - 12 passing, 4 new end-to-end tests
-  - 9 skipped (require full integration environment)
+- Unit Tests: 357/357 (100%) ✅
+- Integration Tests: 20 documented (require full integration environment)
+
+**v0.2 Iteration 8 Additions** (151 new tests):
+- LLM Mock Tests: 37 tests (86% coverage for services/llm.py)
+- LLM Monitoring Tests: 48 tests (~95% coverage for services/llm_monitoring.py)
+- Redis Client Tests: 29 tests (100% coverage for job_queue/client.py)
+- ARQ Worker Tests: 37 tests (~85% coverage for job_queue/worker.py)
+
+**Execution Time**: 1.88 seconds for full suite
 
 **Run tests:**
 ```bash
@@ -992,6 +998,13 @@ pytest tests/ --cov=backend/src --cov-report=html
 - ✅ Discord MESSAGE_CREATE processing
 - ✅ Allowlist and DND filtering
 - ✅ Thread message support
+- ✅ **LLM Integration** (OpenAI & Anthropic clients, error handling, confidence scoring)
+- ✅ **LLM Monitoring** (cost calculation for 10+ models, budget tracking, usage stats)
+- ✅ **Redis Queue** (connection pooling, health checks, singleton pattern)
+- ✅ **ARQ Workers** (lifecycle hooks, task handlers, error handling)
+- ✅ **Error Handling System** (error codes, formatting, recovery steps)
+- ✅ **Help System** (5 categories, interactive navigation)
+- ✅ **Confirmations** (removal/toggle dialogs, DND confirmations)
 
 ### Unit Tests
 

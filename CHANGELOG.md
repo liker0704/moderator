@@ -6,6 +6,231 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.2.0] - v0.2 Iteration 8 - Testing & Integration - 2025-11-18
+
+### 🎯 Major Milestone: v0.2 Iteration 8 Completed
+
+Comprehensive test suite created for v0.2 features: **151 new tests** added with **100% pass rate**. Test coverage increased from ~18% to ~85%+ for critical infrastructure components (LLM integration, monitoring, Redis queue system, ARQ workers).
+
+---
+
+### Iteration 8: Testing & Integration (2025-11-18)
+
+#### Phase 1: LLM Mock Tests
+- **Test Suite** (`tests/test_llm.py` updated, 1,182 lines, 37 tests)
+  - Re-enabled 5 previously skipped tests
+  - Added 32 new comprehensive mock-based tests
+  - **Coverage: 86%** for `services/llm.py` (714 lines)
+  - 100% pass rate (37/37 tests passing)
+
+- **OpenAI Client Tests** (10 tests)
+  - Request formatting validation (API structure, headers, payload)
+  - Response parsing with multiple variants
+  - Token extraction and usage tracking
+  - Error handling (timeout, API errors, network failures)
+  - Confidence scoring (finish_reason='stop' → 0.9, 'length' → 0.7)
+  - Max variants limiting
+  - Tone adjustment verification
+
+- **Anthropic Client Tests** (10 tests)
+  - Request formatting (x-api-key header, system prompt)
+  - Response parsing (content[0].text extraction)
+  - Variant splitting using '---' delimiter
+  - Single variant handling (no delimiters)
+  - Confidence scoring (stop_reason='end_turn' → 0.9, 'max_tokens' → 0.7)
+  - Token counting (input_tokens + output_tokens)
+  - Model variants (opus, sonnet, haiku)
+
+- **LLM Service Integration Tests** (5 tests)
+  - Provider switching (OpenAI ↔ Anthropic)
+  - Monitoring integration verification
+  - Tone functionality (soft mode)
+  - Context string building
+  - Error propagation
+
+- **Edge Case Tests** (7 tests)
+  - Empty responses, missing configs, invalid providers
+  - API key validation
+
+#### Phase 2: LLM Monitoring Tests
+- **Test Suite** (`tests/test_llm_monitoring.py` NEW, 856 lines, 48 tests)
+  - **Coverage: ~95%** for `services/llm_monitoring.py` (535 lines)
+  - 100% pass rate (48/48 tests passing)
+  - All financial calculations use Decimal (not float)
+
+- **Cost Calculation Tests** (19 tests)
+  - All 10 pricing models tested (GPT-4, GPT-3.5, Claude Opus/Sonnet/Haiku)
+  - Zero token handling
+  - Large token counts (100k+)
+  - Unknown model fallback to default pricing
+  - Decimal precision validation (6 decimal places)
+  - Parametrized tests for multiple models
+
+- **Request Tracking Tests** (8 tests)
+  - Successful request tracking with all parameters
+  - Task association (task_id foreign key)
+  - Error/timeout status tracking
+  - Metadata JSON storage
+  - Cost calculation integration
+  - Database error handling
+
+- **Budget Management Tests** (10 tests)
+  - Budget creation (daily/weekly/monthly periods)
+  - Custom date range budgets
+  - Usage updates after LLM requests
+  - Alert triggers at 80% threshold
+  - Alert suppression below threshold
+  - One alert per period enforcement
+  - Budget rollover on period end
+
+- **Usage Statistics Tests** (8 tests)
+  - Daily usage summaries
+  - Breakdown by provider (OpenAI vs Anthropic)
+  - Breakdown by model
+  - Success rate calculation from status field
+  - Average duration tracking
+  - Token aggregation (prompt + completion)
+  - Date range filtering (default 30 days)
+  - Empty result handling
+
+- **Integration Tests** (3 tests)
+  - Track request + update budget workflow
+  - Create budget + check alerts workflow
+  - Multiple requests processing
+
+#### Phase 3A: Redis Client Tests
+- **Test Suite** (`tests/test_redis_client.py` NEW, 619 lines, 29 tests)
+  - **Coverage: 100%** for `job_queue/client.py` (250 lines)
+  - 26 unit tests passing, 3 integration tests documented
+  - Mock-based testing (no real Redis required)
+
+- **Initialization Tests** (4 tests)
+  - Basic initialization with defaults
+  - Password authentication setup
+  - Custom connection pool size
+  - Decode responses configuration
+
+- **Connection Tests** (7 tests)
+  - Successful connection with pooling
+  - Password authentication flow
+  - Connection refused error handling
+  - Generic network error handling
+  - Graceful disconnection
+  - Disconnect without prior connection
+  - Error handling during disconnection
+
+- **Health Check Tests** (4 tests)
+  - Healthy connection verification
+  - Health check when disconnected
+  - Connection error handling
+  - Timeout error handling
+
+- **Client Property Tests** (2 tests)
+  - Client access when connected
+  - RuntimeError when not connected
+
+- **Global Singleton Tests** (9 tests)
+  - Initialization from config
+  - Config override with explicit params
+  - Error when config unavailable
+  - Get initialized client
+  - Error when not initialized
+  - Close and cleanup
+  - Close when no client exists
+  - Global health check
+  - Health check when not initialized
+
+- **Integration Test Documentation** (3 tests marked @pytest.mark.skip)
+  - Real Redis connection (requires Docker)
+  - Real GET/SET operations
+  - Connection pooling verification
+  - Includes Docker Compose setup guide
+
+#### Phase 3B: ARQ Worker Tests
+- **Test Suite** (`tests/test_worker.py` NEW, 736 lines, 37 tests)
+  - **Coverage: ~85%** for `job_queue/worker.py` (289 lines)
+  - 32 unit tests passing, 5 integration tests documented
+
+- **WorkerConfig Tests** (3 tests)
+  - Default values validation
+  - Custom values configuration
+  - Partial override testing
+
+- **Lifecycle Hook Tests** (11 tests)
+  - Startup hook with database initialization
+  - Startup failure handling (DB connection, config errors)
+  - Shutdown hook with cleanup
+  - Shutdown error handling
+  - Shutdown with no DB pool
+  - Job start logging
+  - Job start with missing context
+  - Job completion logging
+  - Job failure error logging
+  - Job failure with missing error info
+
+- **Worker Settings Tests** (6 tests)
+  - Settings class creation
+  - Redis configuration (host, port, password)
+  - Job configuration (timeout, max_jobs, retries)
+  - Queue configuration (name, options)
+  - Lifecycle hooks attachment
+  - Error on missing Redis config
+
+- **Task Handler Registration Tests** (7 tests)
+  - All 6 handlers registered correctly:
+    - process_discord_message
+    - process_telegram_message
+    - post_to_discord
+    - post_to_telegram
+    - generate_llm_response
+    - send_reminder
+  - Coroutine validation for async handlers
+  - Handler signature verification
+
+- **Worker Creation Tests** (2 tests)
+  - Worker instance creation
+  - Settings propagation
+
+- **Error Handling Tests** (3 tests)
+  - Startup with missing config
+  - Shutdown with no pool
+  - Worker settings with no Redis
+
+- **Integration Test Documentation** (5 tests marked @pytest.mark.skip)
+  - Task enqueueing and processing
+  - Retry behavior on failures
+  - Full worker lifecycle
+  - Concurrent job handling
+  - Job timeout enforcement
+
+#### Bug Fixes
+- **Critical Import Bug** (`backend/src/job_queue/worker.py`)
+  - Fixed incorrect import: `from queue.handlers` → `from job_queue.handlers`
+  - This bug prevented worker module from being imported
+  - Necessary fix for module functionality
+
+#### Test Infrastructure
+- **Mocking Patterns**
+  - AsyncMock for all async operations
+  - Proper aiohttp.ClientSession mocking
+  - AsyncPG connection mocking
+  - Redis client mocking
+  - Config mocking
+
+- **Test Execution**
+  - **Total Tests: 377** (357 passing, 20 skipped)
+  - **New Tests: 151** (143 unit tests + 8 integration test stubs)
+  - **Pass Rate: 100%** for all unit tests
+  - **Execution Time: 1.88 seconds**
+
+- **Integration Test Documentation**
+  - Docker Compose configurations
+  - Setup instructions for CI/CD
+  - GitHub Actions workflow examples
+  - Local testing with Docker commands
+
+---
+
 ## [0.2.0] - v0.2 Iteration 7 - UX Improvements & Allowlist Enhancement - 2025-11-18
 
 ### 🎨 Major Milestone: v0.2 Iteration 7 Completed

@@ -26,7 +26,7 @@ from utils.logger import get_logger
 from database.connection import init_asyncpg_pool, close_asyncpg_pool
 
 # Import task handlers
-from queue.handlers import (
+from job_queue.handlers import (
     process_discord_message,
     process_telegram_message,
     post_to_discord,
