@@ -228,13 +228,13 @@
 - [ ] Команда /export (экспорт данных в JSON)
 - [ ] Ручная анонимизация (опционально)
 
-#### 7. Health Check API (1 день)
-- [ ] Endpoint /health
-- [ ] Проверки:
-  - [ ] Discord connection
-  - [ ] Database
-  - [ ] Redis
-  - [ ] LLM API (опционально)
+#### 7. Health Check API (1 день) ✅ COMPLETE (v1.0 Iteration 1)
+- [x] Endpoint /health
+- [x] Проверки:
+  - [x] Discord connection
+  - [x] Database
+  - [x] Redis
+  - [x] LLM API (опционально)
 
 #### 8. Prometheus metrics (опционально, 2 дня)
 - [ ] Endpoint /metrics

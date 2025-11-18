@@ -68,6 +68,7 @@ class ModeratorApplication:
         self._telegram_task: Optional[asyncio.Task] = None
         self._discord_task: Optional[asyncio.Task] = None
         self._monitoring_task: Optional[asyncio.Task] = None
+        self._health_check_task: Optional[asyncio.Task] = None
 
         logger.info("ModeratorApplication instance created")
 
@@ -118,6 +119,15 @@ class ModeratorApplication:
                 max_size=15
             )
             logger.info("Asyncpg connection pool established")
+
+            # 2c. Initialize Redis client (if configured)
+            if self.config.redis:
+                logger.info("Initializing Redis client...")
+                from job_queue.client import init_redis_client
+                await init_redis_client()
+                logger.info("Redis client initialized")
+            else:
+                logger.warning("Redis configuration not found - Redis integration disabled")
 
             # 3. Check database health and run migrations if needed
             if not self.db.health_check():
@@ -218,6 +228,21 @@ class ModeratorApplication:
                 name="database_health_monitor"
             )
 
+            # Start Health Check API server
+            logger.info("Starting Health Check API server...")
+            from api.server import run_health_check_server
+            import os
+
+            health_check_port = int(os.getenv('HEALTH_CHECK_PORT', '8000'))
+            self._health_check_task = asyncio.create_task(
+                run_health_check_server(
+                    discord_gateway=self.discord_gateway,
+                    port=health_check_port
+                ),
+                name="health_check_api"
+            )
+            logger.info(f"Health Check API server started on port {health_check_port}")
+
             # Setup signal handlers for graceful shutdown
             self._setup_signal_handlers()
 
@@ -304,6 +329,16 @@ class ModeratorApplication:
                 except asyncio.CancelledError:
                     pass
                 logger.info("Database health monitoring stopped")
+
+            # Stop Health Check API server
+            if self._health_check_task and not self._health_check_task.done():
+                logger.info("Stopping Health Check API server...")
+                self._health_check_task.cancel()
+                try:
+                    await self._health_check_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("Health Check API server stopped")
 
             # Close database connections
             if self.db_pool:
