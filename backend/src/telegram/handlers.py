@@ -10,7 +10,7 @@ Commands:
 - /test_connection: Test Discord connection
 - /discord_status: Show Discord connection status
 - /status: Show current bot status and configurations
-- /dnd [on|off]: Toggle or configure Do Not Disturb mode
+- /dnd [on|off|schedule]: Toggle or configure Do Not Disturb mode with schedule support
 - /allow_channel {server_id} {channel_id}: Add channel to allowlist
 - /unallow_channel {channel_id}: Remove channel from allowlist
 - /settings: View and edit settings
@@ -94,7 +94,7 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 
 ⚙️ Settings & Status:
 /status - Show system status (DND, channels, etc.)
-/dnd [on|off] - Toggle or configure DND mode
+/dnd [on|off|schedule] - Toggle or configure DND mode
 /settings - View/edit all settings
 
 ℹ️ General:
@@ -264,55 +264,87 @@ async def cmd_dnd(message: dict, bot: 'TelegramBot'):
     Handle /dnd command.
 
     Toggle or configure Do Not Disturb mode.
-    Supports: /dnd, /dnd on, /dnd off
+    Supports: /dnd, /dnd on, /dnd off, /dnd schedule
     """
     user_id = message['from']['id']
     text = message.get('text', '')
     parts = text.split()
 
-    # TODO: Integrate with actual DND service
-    if len(parts) == 1:
-        # Just /dnd - show current status
-        dnd_text = """⏸️ Do Not Disturb Settings
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.dnd import get_dnd_settings, update_dnd_settings, is_dnd_active
 
-Current Status: Disabled
+    db_pool = get_asyncpg_pool()
+
+    async with db_pool.acquire() as conn:
+        user = await UserDAO.get_user_by_tg_id(conn, user_id)
+        if not user:
+            await bot.send_message(user_id, "❌ User not found. Use /start first.")
+            return
+
+        user_id_db = user['id']
+
+        if len(parts) == 1:
+            # Just /dnd - show current status
+            settings = await get_dnd_settings(conn, user_id_db)
+            is_active = await is_dnd_active(conn, user_id_db)
+
+            status_text = "🔕 Enabled" if settings['dnd_enabled'] else "🔔 Disabled"
+            active_text = "✅ Currently active" if is_active else "⏸️ Not active now"
+
+            schedule_text = "None"
+            if settings.get('dnd_schedule_json'):
+                schedule_text = f"Custom schedule configured"
+
+            dnd_text = f"""⏸️ Do Not Disturb Settings
+
+Status: {status_text}
+{active_text}
+Schedule: {schedule_text}
 
 Commands:
 • /dnd on - Enable DND mode
 • /dnd off - Disable DND mode
+• /dnd schedule - Configure schedule
 
-When DND is enabled, you won't receive message notifications. Messages will be queued for later review."""
+When DND is enabled, you won't receive message notifications."""
 
-        await bot.send_message(user_id, dnd_text)
+            await bot.send_message(user_id, dnd_text)
 
-    elif len(parts) == 2:
-        mode = parts[1].lower()
+        elif len(parts) == 2:
+            mode = parts[1].lower()
 
-        if mode == 'on':
-            # Enable DND
-            with bot.db.session_scope() as session:
-                from ..database.dao import UserDAO
-                user = UserDAO.get_user_by_tg_id(session, user_id)
-                if user:
-                    UserDAO.update_dnd_settings(session, user['id'], dnd_enabled=True)
-                    await bot.send_message(user_id, "🔕 DND mode: ON\nYou will not receive message cards.")
-            logger.info(f"DND enabled by user {user_id}")
+            if mode == 'on':
+                # Enable DND
+                await update_dnd_settings(conn, user_id_db, dnd_enabled=True)
+                await bot.send_message(user_id, "🔕 DND mode: ON\nYou will not receive message cards.")
+                logger.info(f"DND enabled by user {user_id}")
 
-        elif mode == 'off':
-            # Disable DND
-            with bot.db.session_scope() as session:
-                from ..database.dao import UserDAO
-                user = UserDAO.get_user_by_tg_id(session, user_id)
-                if user:
-                    UserDAO.update_dnd_settings(session, user['id'], dnd_enabled=False)
-                    await bot.send_message(user_id, "🔔 DND mode: OFF\nYou will receive message cards.")
-            logger.info(f"DND disabled by user {user_id}")
+            elif mode == 'off':
+                # Disable DND
+                await update_dnd_settings(conn, user_id_db, dnd_enabled=False)
+                await bot.send_message(user_id, "🔔 DND mode: OFF\nYou will receive message cards.")
+                logger.info(f"DND disabled by user {user_id}")
+
+            elif mode == 'schedule':
+                # Open schedule configuration dialog
+                schedule_text = """⏰ DND Schedule Configuration
+
+Schedule format: Time intervals per day
+
+Example: "22:00-08:00 Mon-Fri" (nights on weekdays)
+
+Send your schedule or /cancel to abort."""
+
+                await bot.send_message(user_id, schedule_text)
+                bot.set_user_state(user_id, 'awaiting_dnd_schedule')
+                logger.info(f"DND schedule configuration started for user {user_id}")
+
+            else:
+                await bot.send_message(user_id, "❌ Invalid option. Use: /dnd on, /dnd off, or /dnd schedule")
 
         else:
-            await bot.send_message(user_id, "❌ Invalid option. Use: /dnd on or /dnd off")
-
-    else:
-        await bot.send_message(user_id, "❌ Invalid usage. Use: /dnd [on|off]")
+            await bot.send_message(user_id, "❌ Invalid usage. Use: /dnd [on|off|schedule]")
 
 
 async def cmd_allow_channel(message: dict, bot: 'TelegramBot'):
@@ -531,10 +563,105 @@ async def callback_more(query: dict, bot: 'TelegramBot'):
         logger.error(f"Invalid callback data format: {data}")
         return
 
-    # TODO: Load more context from database and update card
-    # For now, just acknowledge
-    await bot.send_message(chat_id, "🔄 Loading more context... (Not implemented yet)")
-    logger.info(f"User {user_id} requested more context for task {task_id}")
+    # Get task and message from database
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.task_dao import TaskDAO
+    from ..database.dao.message_dao import MessageDAO
+    from ..services.context import get_context_by_channel
+    from ..telegram.cards import format_card, create_card_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get task
+            task = await TaskDAO.get_task_by_id(conn, task_id)
+            if not task:
+                await bot.send_message(chat_id, "❌ Task not found")
+                return
+
+            # Get main message
+            msg = await MessageDAO.get_message_by_id(conn, task['source_message_id'])
+            if not msg:
+                await bot.send_message(chat_id, "❌ Message not found")
+                return
+
+            # Get current offset from user state or default to 10
+            state = bot.get_user_state(user_id) or {}
+            state_data = state.get('data', {}) if isinstance(state.get('data'), dict) else {}
+            current_offset = state_data.get(f'offset_{task_id}', 10)
+
+            # Load MORE context (next 10 messages before current offset)
+            # We want to get messages BEFORE the original message, using the limit as cumulative count
+            extended_context_list = await get_context_by_channel(
+                conn,
+                platform=msg['platform'],
+                channel_id=msg['channel_id'],
+                server_id=msg.get('server_id'),
+                thread_id=msg.get('thread_id'),
+                before_message_id=msg['id'],
+                limit=current_offset + 10  # Load 10 more (cumulative)
+            )
+
+            # Convert Message objects to dicts for format_card
+            extended_context = []
+            for ctx_msg in extended_context_list:
+                # Check if it's already a dict or a Message object
+                if hasattr(ctx_msg, '__dict__'):
+                    # It's a Message dataclass, convert to dict
+                    extended_context.append({
+                        'id': ctx_msg.id,
+                        'platform': ctx_msg.platform,
+                        'ext_message_id': ctx_msg.ext_message_id,
+                        'server_id': ctx_msg.server_id,
+                        'channel_id': ctx_msg.channel_id,
+                        'thread_id': ctx_msg.thread_id,
+                        'author_id': ctx_msg.author_id,
+                        'author_name': ctx_msg.author_name,
+                        'content': ctx_msg.content,
+                        'has_image': ctx_msg.has_image,
+                        'context_ref': ctx_msg.context_ref,
+                        'created_at': ctx_msg.created_at,
+                        'platform_created_at': ctx_msg.platform_created_at
+                    })
+                else:
+                    # It's already a dict
+                    extended_context.append(ctx_msg)
+
+            # Update offset for next "more" click
+            new_offset = current_offset + 10
+
+            # Update user state with new offset
+            bot.set_user_state(user_id, 'viewing_task', {
+                **state_data,
+                f'offset_{task_id}': new_offset
+            })
+
+            # Reformat card with extended context
+            updated_card = format_card(msg, extended_context)
+
+            # Determine if there are more messages available
+            # If we got fewer messages than requested, there are no more
+            show_more_button = len(extended_context) >= new_offset
+
+            keyboard = create_card_keyboard(task_id, show_more=show_more_button)
+
+            # Edit message with updated card
+            success = await bot.edit_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=updated_card,
+                reply_markup=keyboard
+            )
+
+            if success:
+                logger.info(f"Extended context for task {task_id}, offset now {new_offset}, total context: {len(extended_context)}")
+            else:
+                await bot.send_message(chat_id, "⚠️ Could not update card")
+
+    except Exception as e:
+        logger.error(f"Error loading more context for task {task_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error loading context: {str(e)}")
 
 
 async def callback_confirm(query: dict, bot: 'TelegramBot'):
@@ -975,6 +1102,11 @@ async def handle_fsm_message(message: dict, bot: 'TelegramBot') -> bool:
         await handle_reply_text_input(message, bot, state)
         return True
 
+    # Handle DND schedule input
+    if state == 'awaiting_dnd_schedule':
+        await handle_dnd_schedule_input(message, bot)
+        return True
+
     return False
 
 
@@ -1107,6 +1239,55 @@ Please confirm to send this message."""
     })
 
     logger.info(f"User {user_id} submitted reply for task {task_id}, awaiting confirmation")
+
+
+async def handle_dnd_schedule_input(message: dict, bot: 'TelegramBot'):
+    """Handle DND schedule configuration input."""
+    import json
+
+    user_id = message['from']['id']
+    schedule_text = message.get('text', '').strip()
+
+    # Simple format: "22:00-08:00 Mon-Sun" or "weeknights" presets
+    # For MVP, just store as JSON directly or use presets
+
+    # Example: preset for weeknights
+    if schedule_text.lower() == 'weeknights':
+        schedule_json = json.dumps([{
+            "start": "22:00",
+            "end": "08:00",
+            "days": [0, 1, 2, 3, 4]  # Mon-Fri
+        }])
+    elif schedule_text.lower() == 'always':
+        schedule_json = json.dumps([{
+            "start": "00:00",
+            "end": "23:59",
+            "days": [0, 1, 2, 3, 4, 5, 6]  # All days
+        }])
+    else:
+        # TODO: Parse custom schedule format
+        await bot.send_message(user_id,
+            "❌ Custom schedules not yet supported. Use presets:\n"
+            "• weeknights - 22:00-08:00 Mon-Fri\n"
+            "• always - All day every day"
+        )
+        return
+
+    # Save schedule
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.dnd import update_dnd_settings
+
+    db_pool = get_asyncpg_pool()
+
+    async with db_pool.acquire() as conn:
+        user = await UserDAO.get_user_by_tg_id(conn, user_id)
+        if user:
+            await update_dnd_settings(conn, user['id'], dnd_schedule_json=schedule_json)
+            await bot.send_message(user_id, "✅ DND schedule configured!")
+            logger.info(f"DND schedule set for user {user_id}: {schedule_json}")
+
+    bot.clear_user_state(user_id)
 
 
 async def callback_cancel_reply(query: dict, bot: 'TelegramBot'):

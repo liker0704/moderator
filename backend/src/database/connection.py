@@ -416,3 +416,25 @@ async def close_asyncpg_pool():
     if _asyncpg_pool:
         await _asyncpg_pool.close()
         _asyncpg_pool = None
+
+
+async def check_database_health() -> bool:
+    """
+    Check if database connection is healthy.
+
+    Returns:
+        True if database is accessible, False otherwise
+    """
+    try:
+        pool = get_asyncpg_pool()
+        if not pool:
+            return False
+
+        async with pool.acquire() as conn:
+            await conn.fetchval('SELECT 1')
+        return True
+    except Exception as e:
+        from utils.logger import get_logger
+        logger = get_logger(__name__)
+        logger.error(f"Database health check failed: {e}")
+        return False

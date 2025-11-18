@@ -335,7 +335,7 @@ class UserDAO:
     async def update_dnd_settings(
         conn: asyncpg.Connection,
         user_id: int,
-        dnd_enabled: bool,
+        dnd_enabled: Optional[bool] = None,
         dnd_schedule_json: Optional[str] = None,
     ) -> bool:
         """
@@ -344,37 +344,61 @@ class UserDAO:
         Args:
             conn: AsyncPG database connection
             user_id: User ID
-            dnd_enabled: Whether DND mode is enabled
-            dnd_schedule_json: JSON string with DND schedule (optional)
-                              e.g., '{"start": "22:00", "end": "08:00"}'
+            dnd_enabled: Whether DND mode is enabled (optional, only updates if provided)
+            dnd_schedule_json: JSON string with DND schedule (optional, only updates if provided)
+                              e.g., '[{"start": "22:00", "end": "08:00", "days": [0,1,2,3,4]}]'
 
         Returns:
             True if settings were updated, False if settings not found
 
         Example:
             >>> import json
-            >>> schedule = json.dumps({"start": "22:00", "end": "08:00"})
-            >>> updated = await UserDAO.update_dnd_settings(
+            >>> # Update only DND enabled
+            >>> await UserDAO.update_dnd_settings(conn, user_id=1, dnd_enabled=True)
+            >>> # Update only schedule
+            >>> schedule = json.dumps([{"start": "22:00", "end": "08:00", "days": [0,1,2,3,4]}])
+            >>> await UserDAO.update_dnd_settings(conn, user_id=1, dnd_schedule_json=schedule)
+            >>> # Update both
+            >>> await UserDAO.update_dnd_settings(
             ...     conn, user_id=1, dnd_enabled=True, dnd_schedule_json=schedule
             ... )
         """
-        query = """
-            UPDATE settings
-            SET dnd_enabled = $1,
-                dnd_schedule_json = $2,
-                updated_at = $3
-            WHERE user_id = $4
+        # Build dynamic update query based on provided parameters
+        update_fields = []
+        params = []
+        param_count = 1
+
+        if dnd_enabled is not None:
+            update_fields.append(f"dnd_enabled = ${param_count}")
+            params.append(dnd_enabled)
+            param_count += 1
+
+        if dnd_schedule_json is not None:
+            update_fields.append(f"dnd_schedule_json = ${param_count}")
+            params.append(dnd_schedule_json)
+            param_count += 1
+
+        if not update_fields:
+            # No fields to update
+            return False
+
+        # Add updated_at
+        update_fields.append(f"updated_at = ${param_count}")
+        params.append(datetime.utcnow())
+        param_count += 1
+
+        # Add user_id for WHERE clause
+        params.append(user_id)
+
+        query = f"""
+            INSERT INTO settings (user_id, dnd_enabled, dnd_schedule_json, created_at, updated_at)
+            VALUES (${param_count}, FALSE, NULL, NOW(), NOW())
+            ON CONFLICT (user_id)
+            DO UPDATE SET {', '.join(update_fields)}
         """
 
-        result = await conn.execute(
-            query,
-            dnd_enabled,
-            dnd_schedule_json,
-            datetime.utcnow(),
-            user_id,
-        )
-
-        return result.split()[-1] != '0'
+        result = await conn.execute(query, *params)
+        return True
 
     @staticmethod
     async def update_reminders_enabled(

@@ -127,10 +127,35 @@ def format_card(message: dict, context_messages: list) -> str:
 
     # Build message section
     message_content = message.get('content') or '[No content]'
-    if message.get('has_image'):
-        message_content += "\n📎 [Has attachments]"
 
-    message_section = f"\n\n💬 Current Message:\n{message_content}"
+    # Add attachment section if message has images/files
+    attachment_text = ""
+    if message.get('has_image') or message.get('attachments'):
+        # Get attachments from message dict if available
+        if 'attachments' in message and message['attachments']:
+            attachment_text = "\n\n📎 Attachments:"
+            for att in message['attachments']:
+                if att['kind'] == 'image':
+                    attachment_text += f"\n🖼 [Image]({att['ref']})"
+                else:
+                    # Get filename from meta if available
+                    filename = att.get('filename', 'unknown')
+                    if not filename or filename == 'unknown':
+                        # Try to parse from meta JSON
+                        meta = att.get('meta')
+                        if meta:
+                            try:
+                                import json
+                                meta_dict = json.loads(meta) if isinstance(meta, str) else meta
+                                filename = meta_dict.get('filename', 'unknown')
+                            except:
+                                pass
+                    attachment_text += f"\n📄 [File: {filename}]({att['ref']})"
+        else:
+            # Fallback if attachments array not loaded
+            attachment_text = "\n\n📎 (Has attachments)"
+
+    message_section = f"\n\n💬 Current Message:\n{message_content}{attachment_text}"
 
     # Build card
     card = f"{header}{context_text}{message_section}"
@@ -291,22 +316,27 @@ def _truncate_text(text: str, max_length: int) -> str:
 # Keyboard Creation Functions
 # =============================================================================
 
-def create_card_keyboard(task_id: int) -> dict:
+def create_card_keyboard(task_id: int, show_more: bool = True) -> dict:
     """
     Create inline keyboard for message card.
 
     Args:
         task_id: Task ID for callback data
+        show_more: Whether to show "Показать больше" button (default: True)
 
     Returns:
         Telegram inline keyboard dict
     """
+    # First row - always has Reply button
+    first_row = [{"text": "✍️ Ответить", "callback_data": f"reply_{task_id}"}]
+
+    # Add "Show More" button if enabled
+    if show_more:
+        first_row.append({"text": "📖 Показать больше", "callback_data": f"more_{task_id}"})
+
     return {
         "inline_keyboard": [
-            [
-                {"text": "✍️ Ответить", "callback_data": f"reply_{task_id}"},
-                {"text": "📖 Показать больше", "callback_data": f"more_{task_id}"}
-            ],
+            first_row,
             [
                 {"text": "🔕 DND", "callback_data": "toggle_dnd"}
             ]

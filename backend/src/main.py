@@ -67,6 +67,7 @@ class ModeratorApplication:
         # Tasks for concurrent operations
         self._telegram_task: Optional[asyncio.Task] = None
         self._discord_task: Optional[asyncio.Task] = None
+        self._monitoring_task: Optional[asyncio.Task] = None
 
         logger.info("ModeratorApplication instance created")
 
@@ -205,9 +206,16 @@ class ModeratorApplication:
             if self.discord_gateway:
                 logger.info("Starting Discord Gateway...")
                 self._discord_task = asyncio.create_task(
-                    self.discord_gateway.start(),
+                    self._run_discord_gateway(),
                     name="discord_gateway"
                 )
+
+            # Start database health monitoring
+            logger.info("Starting database health monitoring...")
+            self._monitoring_task = asyncio.create_task(
+                self.monitor_database_health(),
+                name="database_health_monitor"
+            )
 
             # Setup signal handlers for graceful shutdown
             self._setup_signal_handlers()
@@ -285,6 +293,16 @@ class ModeratorApplication:
                         pass
 
                 logger.info("Telegram bot stopped")
+
+            # Stop monitoring task
+            if self._monitoring_task and not self._monitoring_task.done():
+                logger.info("Stopping database health monitoring...")
+                self._monitoring_task.cancel()
+                try:
+                    await self._monitoring_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("Database health monitoring stopped")
 
             # Close database connections
             if self.db_pool:
@@ -393,10 +411,13 @@ class ModeratorApplication:
 
                 # 3. Save attachments
                 for attachment in attachments:
-                    await AttachmentDAO.create_attachment(
+                    content_type = attachment.get('content_type', '')
+                    kind = 'image' if content_type.startswith('image') else 'file'
+
+                    attachment_id = await AttachmentDAO.create_attachment(
                         conn,
                         message_id=message_id,
-                        kind='image' if attachment.get('content_type', '').startswith('image') else 'file',
+                        kind=kind,
                         ref=attachment.get('url'),
                         meta=json.dumps({
                             'filename': attachment.get('filename'),
@@ -404,6 +425,11 @@ class ModeratorApplication:
                             'width': attachment.get('width'),
                             'height': attachment.get('height')
                         })
+                    )
+
+                    logger.debug(
+                        f"Saved attachment {attachment.get('id')} for message {message_id} "
+                        f"(kind: {kind}, filename: {attachment.get('filename')})"
                     )
 
                 # 4. Create task for moderator
@@ -435,19 +461,56 @@ class ModeratorApplication:
 
         except Exception as e:
             logger.error(f"Error handling Discord message: {e}", exc_info=True)
-            await send_error_alert(
-                "Error processing Discord message",
-                context={
-                    "message_id": message_data.get("id"),
-                    "error": str(e)
-                },
-                throttle_key="discord_message_error"
+
+            # Alert on repeated errors
+            from services.alerts import send_alert
+            await send_alert(
+                self.telegram_bot,
+                f"Failed to process Discord message: {str(e)}",
+                alert_type="ERROR",
+                throttle_key="discord_message_error",
+                throttle_seconds=900  # 15 minutes
             )
+
+    async def _run_discord_gateway(self):
+        """Run Discord Gateway with error handling and alerting."""
+        try:
+            if self.discord_gateway:
+                await self.discord_gateway.start()
+        except Exception as e:
+            logger.error(f"Discord gateway error: {e}", exc_info=True)
+
+            # Send alert
+            from services.alerts import alert_discord_error
+            await alert_discord_error(self.telegram_bot, str(e))
+
+            # Attempt reconnection after delay
+            await asyncio.sleep(30)
+            if self._running:
+                logger.info("Attempting to restart Discord Gateway...")
+                self._discord_task = asyncio.create_task(
+                    self._run_discord_gateway(),
+                    name="discord_gateway"
+                )
+
+    async def monitor_database_health(self):
+        """Monitor database health and alert on failures."""
+        from database.connection import check_database_health
+        from services.alerts import alert_database_error
+
+        while self._running:
+            await asyncio.sleep(300)  # Check every 5 minutes
+
+            if not await check_database_health():
+                await alert_database_error(
+                    self.telegram_bot,
+                    "Database connection unhealthy"
+                )
 
     async def send_card_to_telegram(self, task_id: int, message_id: int, conn):
         """Send message card to Telegram moderator."""
         try:
-            from database.dao import MessageDAO, AsyncTaskDAO
+            from database.dao import MessageDAO, AttachmentDAO, AsyncTaskDAO
             from services.context import get_context_by_channel
             from telegram.cards import format_card, create_card_keyboard
 
@@ -456,6 +519,10 @@ class ModeratorApplication:
             if not message:
                 logger.error(f"Message {message_id} not found for task {task_id}")
                 return
+
+            # Load attachments for message
+            attachments = await AttachmentDAO.get_attachments_for_message(conn, message_id)
+            message['attachments'] = attachments  # Add to message dict for card formatting
 
             # Get context (last 10 messages from same channel)
             context_messages = await get_context_by_channel(
@@ -475,7 +542,8 @@ class ModeratorApplication:
             result = await self.telegram_bot.send_message(
                 chat_id=self.config.telegram.moderator_user_id,
                 text=card_text,
-                reply_markup=keyboard
+                reply_markup=keyboard,
+                disable_web_page_preview=True  # Disable link previews for cleaner cards
             )
 
             if result.get('ok'):

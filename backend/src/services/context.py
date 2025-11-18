@@ -191,6 +191,7 @@ async def get_context_by_channel(
     channel_id: str,
     server_id: Optional[str] = None,
     thread_id: Optional[str] = None,
+    before_message_id: Optional[int] = None,
     limit: int = 10,
     offset: int = 0
 ) -> List[Message]:
@@ -206,6 +207,7 @@ async def get_context_by_channel(
         channel_id: Channel or chat ID
         server_id: Server/guild ID (for Discord)
         thread_id: Thread ID (optional)
+        before_message_id: Get messages before this message ID (optional)
         limit: Maximum number of messages to retrieve (default: 10)
         offset: Number of messages to skip (default: 0)
 
@@ -223,6 +225,7 @@ async def get_context_by_channel(
         >>>     )
     """
     try:
+        # Build query with optional before_message_id filter
         query = """
             SELECT
                 id,
@@ -243,20 +246,45 @@ async def get_context_by_channel(
               AND channel_id = $2
               AND (thread_id = $3 OR (thread_id IS NULL AND $3 IS NULL))
               AND (server_id = $4 OR (server_id IS NULL AND $4 IS NULL))
-            ORDER BY
-                COALESCE(platform_created_at, created_at) DESC
-            LIMIT $5 OFFSET $6
         """
 
-        rows = await conn.fetch(
-            query,
-            platform,
-            channel_id,
-            thread_id,
-            server_id,
-            limit,
-            offset
-        )
+        params = [platform, channel_id, thread_id, server_id]
+
+        # Add before_message_id filter if specified
+        if before_message_id is not None:
+            # Get the timestamp of the reference message first
+            ref_query = """
+                SELECT COALESCE(platform_created_at, created_at) as ref_time
+                FROM messages
+                WHERE id = $1
+            """
+            ref_row = await conn.fetchrow(ref_query, before_message_id)
+            if ref_row and ref_row['ref_time']:
+                query += " AND COALESCE(platform_created_at, created_at) < $5"
+                params.append(ref_row['ref_time'])
+                query += """
+                    ORDER BY
+                        COALESCE(platform_created_at, created_at) DESC
+                    LIMIT $6 OFFSET $7
+                """
+                params.extend([limit, offset])
+            else:
+                # Fallback if reference message not found
+                query += """
+                    ORDER BY
+                        COALESCE(platform_created_at, created_at) DESC
+                    LIMIT $5 OFFSET $6
+                """
+                params.extend([limit, offset])
+        else:
+            query += """
+                ORDER BY
+                    COALESCE(platform_created_at, created_at) DESC
+                LIMIT $5 OFFSET $6
+            """
+            params.extend([limit, offset])
+
+        rows = await conn.fetch(query, *params)
 
         messages = []
         for row in rows:
