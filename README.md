@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: v0.2 Iteration 7
-**Status**: v0.2 UX Improvements Complete ✅
+**Version**: v1.0.2
+**Status**: v1.0 Iteration 2 - Edit Feature Complete ✅
 **Last Updated**: November 18, 2025
 
 ---
@@ -106,15 +106,20 @@ This system is designed for a **single moderator** (single-user system).
 - ✅ Confirmation dialogs for destructive actions (DND toggle, channel removal)
 - ✅ Error recovery suggestions and request ID tracking
 
+### v1.0 New Features (Iteration 2)
+
+**✅ Reply Editing** (2025-11-18)
+- Edit sent replies within 48-hour time window
+- Edit history tracking with complete audit trail
+- Edit button in Telegram cards for recent replies
+- Edit confirmation dialog with text comparison
+- 5 new callback handlers for edit workflow
+- 4 database indexes for edit query optimization
+
 ### Planned Features
 
-**v0.2** (Remaining)
-- Additional integration tests
-- Performance optimizations
-
-**v1.0** (Future)
+**v1.0** (Remaining)
 - Multi-server support
-- Edit sent messages
 - Search through history
 - Basic metrics and analytics
 - Quick reply templates
@@ -542,6 +547,16 @@ Context:
 [Reply] [Show More] [DND]
 ```
 
+**Sent Cards** (after replying):
+```
+✅ Sent to #general at 12:35:20
+Your reply: "Your message text"
+
+[Edit] [Delete] [View History]
+```
+
+The **[Edit]** button is available for replies sent within the last 48 hours.
+
 ### Replying to Messages
 
 1. Click **[Reply]** button
@@ -627,7 +642,18 @@ Or set up automatic schedule:
 → Auto-enable/disable daily
 ```
 
-#### Workflow 3: Add a New Channel
+#### Workflow 3: Edit a Sent Reply
+
+1. In the sent card, click **[Edit]** button
+2. Current reply text is shown
+3. Type the new text
+4. Click **[Confirm]** to update
+5. Edit is sent to Discord/Telegram
+6. Card updates with new text
+
+**Note**: Editing is available for 48 hours after posting.
+
+#### Workflow 4: Add a New Channel
 
 ```
 # In Discord: Enable Developer Mode

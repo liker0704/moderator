@@ -359,7 +359,8 @@ def create_card_keyboard(
     task_id: int,
     show_more: bool = True,
     variants: Optional[List[Dict]] = None,
-    show_ai_buttons: bool = True
+    show_ai_buttons: bool = True,
+    posted_reply: Optional[Dict] = None
 ) -> dict:
     """
     Create inline keyboard for message card.
@@ -369,9 +370,13 @@ def create_card_keyboard(
         show_more: Whether to show "Показать больше" button (default: True)
         variants: AI response variants (if available)
         show_ai_buttons: Show AI-related buttons (Soften, More variants)
+        posted_reply: Posted reply dict (optional) - enables Edit button
 
     Returns:
         Telegram inline keyboard dict
+
+    Note:
+        Edit button shows only if posted_reply provided and < 48h since posting
     """
     keyboard = {'inline_keyboard': []}
 
@@ -415,6 +420,30 @@ def create_card_keyboard(
         {'text': '🔕 DND', 'callback_data': 'toggle_dnd'}
     ]
     keyboard['inline_keyboard'].append(context_row)
+
+    # Edit buttons (if reply was posted and < 48 hours)
+    if posted_reply and posted_reply.get('posted_at'):
+        from datetime import timezone
+
+        posted_at = posted_reply['posted_at']
+
+        # Handle both datetime and string
+        if isinstance(posted_at, str):
+            posted_at = datetime.fromisoformat(posted_at.replace('Z', '+00:00'))
+
+        # Calculate hours since posting
+        now = datetime.now(timezone.utc)
+        hours_since = (now - posted_at).total_seconds() / 3600
+
+        # Show Edit button only if < 48 hours
+        if hours_since < 48:
+            reply_id = posted_reply['id']
+            keyboard['inline_keyboard'].append([
+                {'text': '✏️ Edit Reply', 'callback_data': f'edit_reply_{reply_id}'}
+            ])
+            keyboard['inline_keyboard'].append([
+                {'text': '📊 Show History', 'callback_data': f'show_history_{reply_id}'}
+            ])
 
     return keyboard
 

@@ -33,6 +33,10 @@ Callback handlers:
 - settings_add_channel: Guide user to add channel
 - settings_remove_channel: Show removal dialog
 - settings_refresh: Refresh settings display
+- edit_reply_{reply_id}: Start editing an existing reply
+- confirm_edit_{new_reply_id}: Confirm and post edited reply
+- cancel_edit_{reply_id}: Cancel reply edit operation
+- show_history_{reply_id}: Display edit history for a reply
 
 Each handler processes user input, interacts with services layer,
 and provides appropriate responses and keyboard layouts.
@@ -1401,6 +1405,11 @@ async def handle_fsm_message(message: dict, bot: 'TelegramBot') -> bool:
         await handle_reply_text_input(message, bot, state)
         return True
 
+    # Handle edit reply text input
+    if state.startswith('awaiting_edit_text_'):
+        await handle_edit_text_input(message, bot, state)
+        return True
+
     # Handle DND schedule input
     if state == 'awaiting_dnd_schedule':
         await handle_dnd_schedule_input(message, bot)
@@ -2159,6 +2168,341 @@ Allowlist (top 5):
 
 
 # =============================================================================
+# Edit Reply Callback Handlers
+# =============================================================================
+
+async def callback_edit_reply(query: dict, bot: 'TelegramBot'):
+    """
+    Handle edit_reply_{reply_id} callback.
+
+    Flow:
+    1. Extract reply_id from callback_data
+    2. Get user_id from query
+    3. Validate edit permission via ReplyEditorService
+    4. If allowed - set FSM state awaiting_edit_text_{reply_id}
+    5. If not - show error with reason
+    """
+    callback_data = query['data']
+    reply_id = int(callback_data.split('_')[2])  # edit_reply_123
+    user_id = query['from']['id']
+    message_id = query['message']['message_id']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            from ..services.reply_editor import ReplyEditorService
+
+            # Validate
+            validation = await ReplyEditorService.validate_edit_permission(
+                conn, reply_id, user_id
+            )
+
+            if not validation['can_edit']:
+                # Show error
+                error_reasons = {
+                    'not_found': 'Reply not found',
+                    'not_posted': 'Reply not posted yet',
+                    'time_expired': f"⏰ Edit window expired (>48h)\n\nReply was posted {validation.get('hours_since_posted', 0):.1f}h ago",
+                    'permission_denied': '🚫 You cannot edit this reply',
+                    'task_muted': 'Task is muted - cannot edit'
+                }
+                error_msg = error_reasons.get(validation['reason'], f"Cannot edit: {validation['reason']}")
+
+                await bot.answer_callback_query(
+                    query['id'],
+                    text=error_msg,
+                    show_alert=True
+                )
+                return
+
+            # Set FSM state
+            bot.set_user_state(user_id, f"awaiting_edit_text_{reply_id}", {
+                'reply_id': reply_id,
+                'original_content': validation['reply']['content'],
+                'task_id': validation['task']['id']
+            })
+
+            # Prompt for new text
+            await bot.send_message(
+                chat_id,
+                f"✏️ **Edit Reply**\n\n"
+                f"Current text:\n{validation['reply']['content'][:200]}...\n\n"
+                f"Send me the new text:",
+                parse_mode='Markdown'
+            )
+
+            await bot.answer_callback_query(query['id'])
+
+    except Exception as e:
+        logger.error(f"Error in edit_reply callback: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"Error: {str(e)}",
+            show_alert=True
+        )
+
+
+async def handle_edit_text_input(message: dict, bot: 'TelegramBot', state: str):
+    """
+    Handle awaiting_edit_text_{reply_id} FSM state.
+
+    User typed new text for edited reply.
+
+    Flow:
+    1. Get new text from message
+    2. Validate length (not empty, not too long)
+    3. Show confirmation with preview
+    4. Create temp edited reply in DB (not posted yet)
+    5. Set FSM state to awaiting_edit_confirm_{new_reply_id}
+    """
+    user_id = message['from']['id']
+    chat_id = message['chat']['id']
+    new_content = message.get('text', '')
+
+    state_data = bot.get_user_state(user_id)
+    if not state_data:
+        await bot.send_message(chat_id, "⚠️ Session expired. Please try again.")
+        return
+
+    original_reply_id = state_data['data']['reply_id']
+    original_content = state_data['data']['original_content']
+
+    # Validate new text
+    if not new_content or not new_content.strip():
+        await bot.send_message(
+            chat_id,
+            "❌ New text cannot be empty. Please send the new text:"
+        )
+        return
+
+    if len(new_content) > 2000:  # Discord limit
+        await bot.send_message(
+            chat_id,
+            "❌ Text too long (max 2000 characters). Please shorten it:"
+        )
+        return
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            # Create edited reply (not posted yet)
+            from ..database.dao.reply_dao import ReplyDAO
+            new_reply_id = await ReplyDAO.create_edited_reply(
+                conn, original_reply_id, new_content, user_id
+            )
+
+        # Show confirmation
+        from .confirmations import create_edit_confirmation
+        confirmation = create_edit_confirmation(
+            original_content, new_content, new_reply_id
+        )
+
+        await bot.send_message(
+            chat_id,
+            confirmation['text'],
+            reply_markup={'inline_keyboard': confirmation['buttons']},
+            parse_mode='Markdown'
+        )
+
+        # Update FSM
+        bot.set_user_state(user_id, f"awaiting_edit_confirm_{new_reply_id}", {
+            'new_reply_id': new_reply_id,
+            'original_reply_id': original_reply_id
+        })
+
+    except Exception as e:
+        logger.error(f"Error creating edited reply: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+        bot.clear_user_state(user_id)
+
+
+async def callback_confirm_edit(query: dict, bot: 'TelegramBot'):
+    """
+    Handle confirm_edit_{new_reply_id} callback.
+
+    Flow:
+    1. Get new_reply from DB
+    2. Get original reply platform_ref
+    3. Post to platform via ReplyEditorService.edit_reply()
+    4. Update card showing success
+    5. Clear FSM state
+    """
+    callback_data = query['data']
+    new_reply_id = int(callback_data.split('_')[2])  # confirm_edit_123
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            from ..services.reply_editor import ReplyEditorService
+            from ..database.dao.reply_dao import ReplyDAO
+
+            # Get new reply to find original
+            new_reply = await ReplyDAO.get_reply_by_id(conn, new_reply_id)
+            if not new_reply:
+                await bot.answer_callback_query(query['id'], text="Reply not found", show_alert=True)
+                return
+
+            original_reply_id = new_reply['edit_of']
+            new_content = new_reply['content']
+
+            # Get posters (from bot instance or create)
+            telegram_poster = bot  # bot itself has send_message
+            discord_poster = getattr(bot, 'discord_poster', None)
+
+            # Execute edit via service
+            result = await ReplyEditorService.edit_reply(
+                conn,
+                original_reply_id,
+                new_content,
+                user_id,
+                telegram_poster,
+                discord_poster
+            )
+
+            if result['success']:
+                platform = result['platform']
+                await bot.edit_message_text(
+                    chat_id,
+                    query['message']['message_id'],
+                    f"✅ **Reply edited successfully!**\n\n"
+                    f"Platform: {platform.capitalize()}\n"
+                    f"New reply ID: {result['new_reply_id']}\n\n"
+                    f"The message has been updated on {platform}.",
+                    parse_mode='Markdown'
+                )
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                error_code = result.get('error_code', 'unknown')
+
+                await bot.edit_message_text(
+                    chat_id,
+                    query['message']['message_id'],
+                    f"❌ **Edit failed**\n\n"
+                    f"Error: {error_msg}\n"
+                    f"Code: {error_code}\n\n"
+                    f"Please try again or contact support.",
+                    parse_mode='Markdown'
+                )
+
+            await bot.answer_callback_query(query['id'])
+            bot.clear_user_state(user_id)
+
+    except Exception as e:
+        logger.error(f"Error confirming edit: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"Error: {str(e)}",
+            show_alert=True
+        )
+
+
+async def callback_cancel_edit(query: dict, bot: 'TelegramBot'):
+    """
+    Handle cancel_edit_{reply_id} callback.
+
+    Flow:
+    1. Delete temp edited reply from DB (if created)
+    2. Clear FSM state
+    3. Show cancellation message
+    """
+    callback_data = query['data']
+    reply_id = int(callback_data.split('_')[2])  # cancel_edit_123
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        # Delete temp reply if exists
+        async with db_pool.acquire() as conn:
+            from ..database.dao.reply_dao import ReplyDAO
+            await ReplyDAO.delete_reply(conn, reply_id)
+
+        await bot.edit_message_text(
+            chat_id,
+            query['message']['message_id'],
+            "❌ Edit cancelled. No changes were made.",
+            parse_mode='Markdown'
+        )
+
+        await bot.answer_callback_query(query['id'], text="Edit cancelled")
+        bot.clear_user_state(user_id)
+
+    except Exception as e:
+        logger.error(f"Error cancelling edit: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text="Cancelled")
+        bot.clear_user_state(user_id)
+
+
+async def callback_show_edit_history(query: dict, bot: 'TelegramBot'):
+    """
+    Handle show_history_{reply_id} callback.
+
+    Shows all edit versions with timestamps.
+    """
+    callback_data = query['data']
+    reply_id = int(callback_data.split('_')[2])  # show_history_123
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            from ..services.reply_editor import ReplyEditorService
+
+            history = await ReplyEditorService.get_edit_history(conn, reply_id)
+
+            if not history:
+                await bot.answer_callback_query(
+                    query['id'],
+                    text="No edit history found",
+                    show_alert=True
+                )
+                return
+
+            # Format history
+            lines = ["📊 **Edit History**\n"]
+            for idx, item in enumerate(history, 1):
+                status_badge = "🟢 CURRENT" if item['is_current'] else "📝 ORIGINAL" if item['is_original'] else f"✏️ EDIT #{idx-1}"
+                timestamp = item['created_at'].strftime('%Y-%m-%d %H:%M')
+
+                lines.append(
+                    f"{status_badge}\n"
+                    f"Time: {timestamp}\n"
+                    f"Text: {item['content_preview']}\n"
+                )
+
+            history_text = "\n".join(lines)
+
+            await bot.send_message(
+                chat_id,
+                history_text,
+                parse_mode='Markdown'
+            )
+
+            await bot.answer_callback_query(query['id'])
+
+    except Exception as e:
+        logger.error(f"Error showing history: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"Error: {str(e)}",
+            show_alert=True
+        )
+
+
+# =============================================================================
 # Handler Registration
 # =============================================================================
 
@@ -2204,6 +2548,12 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_callback_handler('settings_add_channel', callback_settings_add_channel)
     bot.register_callback_handler('settings_remove_channel', callback_settings_remove_channel)
     bot.register_callback_handler('settings_refresh', callback_settings_refresh)
+
+    # Edit reply callbacks
+    bot.register_callback_handler('edit_reply_', callback_edit_reply)
+    bot.register_callback_handler('confirm_edit_', callback_confirm_edit)
+    bot.register_callback_handler('cancel_edit_', callback_cancel_edit)
+    bot.register_callback_handler('show_history_', callback_show_edit_history)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

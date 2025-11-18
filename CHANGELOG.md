@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.0.2] - 2025-11-18
+
+### Added
+- Reply editing feature with 48-hour time window
+- Edit history tracking with complete audit trail
+- Edit button in Telegram cards for posted replies
+- Edit confirmation dialog with text comparison
+- 5 new callback handlers for edit workflow
+- 4 database indexes for edit query optimization
+
+### Changed
+- Enhanced `ReplyDAO` with `can_edit_reply()` and `create_edited_reply()` methods
+- Updated Telegram cards to show Edit/History buttons for recent replies
+- Extended FSM to support edit text input state
+
+### Technical
+- New `ReplyEditorService` class for edit business logic
+- Database migration 004: indexes for edit performance
+- Integration with Discord and Telegram message editing APIs
+- Comprehensive test suite: 600+ lines of unit and integration tests
+
+---
+
 ## [1.0.0] - v1.0 Iteration 1 - Health Check API - 2025-11-18
 
 ### 🎯 Major Milestone: v1.0 Development Started

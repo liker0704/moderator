@@ -43,8 +43,12 @@ def test_reply_dao_methods_exist():
     assert hasattr(ReplyDAO, 'mark_reply_confirmed')
     assert hasattr(ReplyDAO, 'mark_reply_posted')
     assert hasattr(ReplyDAO, 'delete_reply')
+    assert hasattr(ReplyDAO, 'can_edit_reply')
+    assert hasattr(ReplyDAO, 'create_edited_reply')
     assert callable(ReplyDAO.create_reply)
     assert callable(ReplyDAO.get_reply_by_id)
+    assert callable(ReplyDAO.can_edit_reply)
+    assert callable(ReplyDAO.create_edited_reply)
 
 
 def test_user_dao_methods_exist():

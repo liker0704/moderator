@@ -8,6 +8,7 @@ Handles moderator and LLM-generated replies to tasks.
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 import asyncpg
+import json
 
 
 class ReplyDAO:
@@ -440,3 +441,215 @@ class ReplyDAO:
 
         rows = await conn.fetch(query, reply_id)
         return [dict(row) for row in rows]
+
+    @staticmethod
+    async def can_edit_reply(
+        conn: asyncpg.Connection,
+        reply_id: int,
+        user_id: int,
+        time_limit_hours: int = 48
+    ) -> Dict[str, Any]:
+        """
+        Check if reply can be edited by user.
+
+        Checks:
+        1. Reply exists and is posted (posted_at IS NOT NULL)
+        2. User owns the reply (via task.assignee_user_id)
+        3. Time limit not exceeded (< 48 hours since posted_at)
+
+        Args:
+            conn: Database connection
+            reply_id: ID of reply to check
+            user_id: User requesting edit
+            time_limit_hours: Max hours since posting (default 48)
+
+        Returns:
+            {
+                'can_edit': bool,
+                'reason': str (if can_edit=False),
+                'reply': Dict (reply data if exists),
+                'hours_since_posted': float (if posted)
+            }
+
+        Reasons for can_edit=False:
+        - 'not_found': Reply doesn't exist
+        - 'not_posted': Reply not yet posted
+        - 'time_expired': More than time_limit_hours passed
+        - 'permission_denied': User doesn't own the reply
+
+        Example:
+            >>> result = await ReplyDAO.can_edit_reply(conn, reply_id=123, user_id=1)
+            >>> if result['can_edit']:
+            ...     print("User can edit this reply")
+            ... else:
+            ...     print(f"Cannot edit: {result['reason']}")
+        """
+        # Query with JOIN to tasks to check assignee_user_id and get platform info
+        query = """
+            SELECT
+                r.id,
+                r.task_id,
+                r.content,
+                r.generated_by,
+                r.llm_confidence,
+                r.confirmed,
+                r.posted_at,
+                r.platform_ref,
+                r.edit_of,
+                r.created_at,
+                t.assignee_user_id,
+                m.platform,
+                m.channel_id,
+                EXTRACT(EPOCH FROM (NOW() - r.posted_at))/3600 AS hours_since_posted
+            FROM replies r
+            INNER JOIN tasks t ON r.task_id = t.id
+            INNER JOIN messages m ON t.source_message_id = m.id
+            WHERE r.id = $1
+        """
+
+        row = await conn.fetchrow(query, reply_id)
+
+        # Check 1: Reply exists
+        if not row:
+            return {
+                'can_edit': False,
+                'reason': 'not_found',
+                'reply': None
+            }
+
+        reply_data = dict(row)
+
+        # Check 2: Reply is posted
+        if reply_data['posted_at'] is None:
+            return {
+                'can_edit': False,
+                'reason': 'not_posted',
+                'reply': reply_data
+            }
+
+        # Check 3: User owns the reply
+        if reply_data['assignee_user_id'] != user_id:
+            return {
+                'can_edit': False,
+                'reason': 'permission_denied',
+                'reply': reply_data
+            }
+
+        # Check 4: Time limit not exceeded
+        hours_since = reply_data['hours_since_posted']
+        if hours_since > time_limit_hours:
+            return {
+                'can_edit': False,
+                'reason': 'time_expired',
+                'reply': reply_data,
+                'hours_since_posted': hours_since
+            }
+
+        # All checks passed
+        return {
+            'can_edit': True,
+            'reply': reply_data,
+            'hours_since_posted': hours_since
+        }
+
+    @staticmethod
+    async def create_edited_reply(
+        conn: asyncpg.Connection,
+        original_reply_id: int,
+        new_content: str,
+        user_id: int
+    ) -> int:
+        """
+        Create new reply as edit of original.
+
+        Creates:
+        1. New reply with edit_of = original_reply_id
+        2. Audit log entry ('reply.edit_started')
+
+        Does NOT post to platform - caller must do that.
+
+        Args:
+            conn: Database connection
+            original_reply_id: ID of reply being edited
+            new_content: New reply text
+            user_id: User performing edit
+
+        Returns:
+            new_reply_id: ID of newly created edited reply
+
+        Raises:
+            ValueError: If original_reply doesn't exist or validation fails
+
+        Example:
+            >>> new_id = await ReplyDAO.create_edited_reply(
+            ...     conn=conn,
+            ...     original_reply_id=123,
+            ...     new_content='Updated reply text',
+            ...     user_id=1
+            ... )
+            >>> print(f"Created edited reply with ID: {new_id}")
+        """
+        from .audit_dao import AuditDAO
+
+        # 1. Validate using can_edit_reply
+        validation = await ReplyDAO.can_edit_reply(
+            conn, original_reply_id, user_id
+        )
+
+        if not validation['can_edit']:
+            reason = validation.get('reason', 'unknown')
+            error_messages = {
+                'not_found': f"Reply {original_reply_id} does not exist",
+                'not_posted': f"Reply {original_reply_id} has not been posted yet",
+                'permission_denied': f"User {user_id} does not own reply {original_reply_id}",
+                'time_expired': f"Reply {original_reply_id} edit time limit exceeded ({validation.get('hours_since_posted', 'N/A'):.1f} hours since posting)"
+            }
+            raise ValueError(error_messages.get(reason, f"Cannot edit reply: {reason}"))
+
+        original_reply = validation['reply']
+        task_id = original_reply['task_id']
+
+        # 2. Create new reply with edit_of pointing to original
+        insert_query = """
+            INSERT INTO replies (
+                task_id, content, generated_by, llm_confidence,
+                confirmed, edit_of, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            RETURNING id
+        """
+
+        row = await conn.fetchrow(
+            insert_query,
+            task_id,
+            new_content,
+            original_reply['generated_by'],  # Preserve original generator type
+            original_reply['llm_confidence'],  # Preserve LLM confidence if applicable
+            False,  # Not confirmed yet (pending review)
+            original_reply_id,  # edit_of
+            datetime.utcnow()
+        )
+
+        new_reply_id = row['id']
+
+        # 3. Create audit log entry
+        audit_payload = json.dumps({
+            'original_reply_id': original_reply_id,
+            'new_reply_id': new_reply_id,
+            'task_id': task_id,
+            'user_id': user_id,
+            'platform': original_reply.get('platform'),
+            'channel_id': original_reply.get('channel_id'),
+            'original_content_length': len(original_reply['content']),
+            'new_content_length': len(new_content),
+            'hours_since_posted': validation.get('hours_since_posted')
+        })
+
+        await AuditDAO.log_event(
+            conn=conn,
+            kind='reply.edit_started',
+            payload_json=audit_payload,
+            user_id=user_id
+        )
+
+        return new_reply_id

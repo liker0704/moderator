@@ -189,12 +189,12 @@
 - [ ] Групповое управление allowlist
 - [ ] Фильтры по серверам в карточках
 
-#### 2. Редактирование отправленного (3 дня)
-- [ ] Кнопка "Редактировать" в карточках
-- [ ] Discord edit API
-- [ ] Telegram editMessageText
-- [ ] replies.edit_of (история)
-- [ ] audit_log для правок
+#### 2. Редактирование отправленного (3 дня) ✅ COMPLETE (v1.0 Iteration 2)
+- [x] Кнопка "Редактировать" в карточках
+- [x] Discord edit API
+- [x] Telegram editMessageText
+- [x] replies.edit_of (история)
+- [x] audit_log для правок
 
 #### 3. Поиск по истории (5 дней)
 - [ ] Команда /search
