@@ -4,6 +4,108 @@
 
 Документ описывает стратегию и кейсы тестирования для всех версий системы.
 
+## Текущие результаты тестирования
+
+**Дата**: 18 ноября 2025
+**Версия**: MVP v0.1 Complete
+
+### Автоматические тесты
+
+**Общая статистика:**
+- Всего тестов: 50
+- Проходят: 41 (82%)
+- Пропущено: 9 (приемлемо для MVP)
+
+#### Unit Tests (25/25 - 100% ✅)
+**Файл**: `tests/test_dao.py`, `tests/test_encryption.py`, `tests/test_imports.py`
+
+| Модуль | Тесты | Статус |
+|--------|-------|--------|
+| DAO Methods | 8/8 | ✅ PASS |
+| Encryption | 4/4 | ✅ PASS |
+| Module Imports | 13/13 | ✅ PASS |
+
+**Покрытие:**
+- MessageDAO, TaskDAO, ReplyDAO, UserDAO
+- DiscordDAO, AllowlistDAO, AttachmentDAO, AuditDAO
+- Encryption service (Fernet)
+- Все основные модули импортируются без ошибок
+
+#### Integration Tests (16/25 - 64%)
+**Файл**: `tests/test_integration.py`
+
+**Проходящие тесты (16):**
+1. ✅ `test_discord_to_telegram_flow` - Базовый flow Discord→Telegram
+2. ✅ `test_allowlist_filtering` - Проверка allowlist
+3. ✅ `test_media_attachment_handling` - Обработка медиа
+4. ✅ `test_context_loading` - Загрузка контекста сообщений
+5. ✅ `test_error_handling_and_retry` - Обработка ошибок
+6. ✅ `test_encryption_roundtrip` - Шифрование/дешифрование
+7. ✅ `test_dnd_schedule_parsing` - Парсинг DND расписания
+8. ✅ `test_alert_throttling` - Throttling алертов
+9. ✅ `test_fsm_state_management` - FSM состояния
+10. ✅ `test_time_range_checking` - Проверка временных интервалов
+11. ✅ `test_alert_message_formatting` - Форматирование алертов
+12. ✅ `test_dnd_schedule_validation` - Валидация DND расписания
+13. ✅ `test_complete_discord_to_telegram_flow` - **НОВЫЙ** - Полный E2E flow
+14. ✅ `test_discord_message_allowlist_filtering` - **НОВЫЙ** - Фильтрация по allowlist
+15. ✅ `test_discord_message_dnd_filtering` - **НОВЫЙ** - Фильтрация DND
+16. ✅ `test_discord_thread_message_processing` - **НОВЫЙ** - Поддержка тредов
+
+**Пропущенные тесты (9):**
+- Требуют полное интеграционное окружение
+- Будут включены в v0.2 после рефакторинга структуры импортов
+- Включают: `test_reply_workflow`, `test_dnd_mode_filtering`, `test_card_formatting`, и др.
+
+### Ручное тестирование
+
+**Статус**: В процессе
+
+**Выполненные проверки:**
+- [x] Backend запускается без ошибок
+- [x] База данных инициализируется
+- [x] Миграции применяются
+- [ ] Discord Gateway подключение (требует реальный токен)
+- [ ] Telegram bot отвечает на команды (требует реальный bot token)
+- [ ] Отправка карточек в Telegram (E2E)
+- [ ] Постинг ответов обратно в Discord (E2E)
+- [ ] DND режим в реальном времени
+- [ ] Allowlist управление через команды
+
+**Следующие шаги:**
+1. Настройка тестового Discord сервера
+2. Настройка тестового Telegram бота
+3. Полное E2E тестирование в staging окружении
+4. Performance тестирование под нагрузкой
+
+### Команды для запуска тестов
+
+```bash
+# Активировать виртуальное окружение
+source venv/bin/activate
+
+# Запустить все тесты
+pytest tests/ -v
+
+# Запустить с подробным выводом
+pytest tests/ -v --tb=short
+
+# Запустить только unit тесты
+pytest tests/test_dao.py tests/test_encryption.py tests/test_imports.py -v
+
+# Запустить только integration тесты
+pytest tests/test_integration.py -v
+
+# Запустить с coverage
+pytest tests/ --cov=backend/src --cov-report=html
+
+# Открыть coverage report
+open htmlcov/index.html  # macOS
+xdg-open htmlcov/index.html  # Linux
+```
+
+---
+
 ## Уровни тестирования
 
 ### 1. Unit Tests
