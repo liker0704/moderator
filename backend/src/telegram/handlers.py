@@ -10,17 +10,29 @@ Commands:
 - /test_connection: Test Discord connection
 - /discord_status: Show Discord connection status
 - /status: Show current bot status and configurations
-- /dnd [on|off|schedule]: Toggle or configure Do Not Disturb mode with schedule support
+- /dnd [on|off|schedule]: Toggle or configure Do Not Disturb mode with confirmation dialogs
 - /allow_channel {server_id} {channel_id}: Add channel to allowlist
-- /unallow_channel {channel_id}: Remove channel from allowlist
-- /settings: View and edit settings
+- /unallow_channel [channel_id]: Remove channel from allowlist (with interactive selection)
+- /settings: View and edit settings with action buttons
 
 Callback handlers:
 - reply_{task_id}: Start reply flow for a task
 - more_{task_id}: Load more context for a task
 - confirm_{reply_id}: Confirm and send a reply
 - retry_{task_id}: Retry failed posting
-- toggle_dnd: Toggle DND mode
+- toggle_dnd: Toggle DND mode (shows confirmation dialog)
+- confirm_toggle_dnd_{state}: Execute DND toggle after confirmation
+- cancel_toggle_dnd: Cancel DND toggle action
+- cancel_reply_{reply_id}: Cancel reply submission
+- use_variant_{variant_id}: Select AI-generated response variant
+- soften_{task_id}: Regenerate response with soft tone
+- more_variants_{task_id}: Generate additional response variants
+- unallow_select_{allowlist_id}: Select channel for removal
+- unallow_confirm_{allowlist_id}: Confirm channel removal
+- unallow_cancel: Cancel removal operation
+- settings_add_channel: Guide user to add channel
+- settings_remove_channel: Show removal dialog
+- settings_refresh: Refresh settings display
 
 Each handler processes user input, interacts with services layer,
 and provides appropriate responses and keyboard layouts.
@@ -90,12 +102,12 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 /test_connection - Test Discord connection
 /discord_status - Check Discord connection status
 /allow_channel <server_id> <channel_id> - Add channel to monitoring
-/unallow_channel <channel_id> - Remove channel from monitoring
+/unallow_channel [channel_id] - Remove channel (interactive or by ID)
 
 ⚙️ Settings & Status:
 /status - Show system status (DND, channels, etc.)
 /dnd [on|off|schedule] - Toggle or configure DND mode
-/settings - View/edit all settings
+/settings - View/edit all settings (with action buttons)
 
 ℹ️ General:
 /help - Show this help message
@@ -263,7 +275,7 @@ async def cmd_dnd(message: dict, bot: 'TelegramBot'):
     """
     Handle /dnd command.
 
-    Toggle or configure Do Not Disturb mode.
+    Toggle or configure Do Not Disturb mode with confirmation dialogs.
     Supports: /dnd, /dnd on, /dnd off, /dnd schedule
     """
     user_id = message['from']['id']
@@ -272,7 +284,8 @@ async def cmd_dnd(message: dict, bot: 'TelegramBot'):
 
     from ..database.connection import get_asyncpg_pool
     from ..database.dao.user_dao import UserDAO
-    from ..services.dnd import get_dnd_settings, update_dnd_settings, is_dnd_active
+    from ..services.dnd import get_dnd_settings, is_dnd_active
+    from .confirmations import create_dnd_toggle_confirmation, ConfirmationBuilder
 
     db_pool = get_asyncpg_pool()
 
@@ -314,17 +327,39 @@ When DND is enabled, you won't receive message notifications."""
         elif len(parts) == 2:
             mode = parts[1].lower()
 
-            if mode == 'on':
-                # Enable DND
-                await update_dnd_settings(conn, user_id_db, dnd_enabled=True)
-                await bot.send_message(user_id, "🔕 DND mode: ON\nYou will not receive message cards.")
-                logger.info(f"DND enabled by user {user_id}")
+            if mode == 'on' or mode == 'off':
+                # Get current DND state
+                settings = await get_dnd_settings(conn, user_id_db)
+                current_state = settings['dnd_enabled']
 
-            elif mode == 'off':
-                # Disable DND
-                await update_dnd_settings(conn, user_id_db, dnd_enabled=False)
-                await bot.send_message(user_id, "🔔 DND mode: OFF\nYou will receive message cards.")
-                logger.info(f"DND disabled by user {user_id}")
+                # Determine desired new state
+                desired_state = (mode == 'on')
+
+                # Check if already in desired state
+                if current_state == desired_state:
+                    state_word = "enabled" if desired_state else "disabled"
+                    emoji = "🔕" if desired_state else "🔔"
+                    await bot.send_message(
+                        user_id,
+                        f"{emoji} DND mode is already {state_word}."
+                    )
+                    return
+
+                # Show confirmation dialog
+                dialog = create_dnd_toggle_confirmation(current_state)
+                text_msg, keyboard = ConfirmationBuilder.format_confirmation(dialog)
+
+                # Store pending action in user state
+                bot.set_user_state(user_id, 'awaiting_dnd_confirmation', {
+                    'new_state': desired_state,
+                    'user_id_db': user_id_db
+                })
+
+                await bot.send_message(user_id, text_msg, reply_markup=keyboard, parse_mode='Markdown')
+                logger.info(
+                    f"DND toggle confirmation shown to user {user_id}: "
+                    f"{current_state} -> {desired_state}"
+                )
 
             elif mode == 'schedule':
                 # Open schedule configuration dialog
@@ -411,25 +446,113 @@ async def cmd_unallow_channel(message: dict, bot: 'TelegramBot'):
     Handle /unallow_channel command.
 
     Remove a channel from the monitoring allowlist.
-    Usage: /unallow_channel <channel_id>
+    Usage:
+    - /unallow_channel - Show interactive selection dialog
+    - /unallow_channel <channel_id> - Legacy mode (direct removal)
     """
     user_id = message['from']['id']
     text = message.get('text', '')
     parts = text.split()
 
-    if len(parts) != 2:
+    # Check if channel_id was provided (legacy mode)
+    if len(parts) == 2:
+        # Legacy mode: direct removal by channel_id
+        await _unallow_channel_by_id(message, bot, parts[1])
+    elif len(parts) == 1:
+        # New mode: show interactive selection dialog
+        await _show_allowlist_selection(user_id, bot)
+    else:
         error_text = """❌ Invalid usage
 
-Correct format:
-/unallow_channel <channel_id>
+Usage:
+• /unallow_channel - Show selection dialog
+• /unallow_channel <channel_id> - Remove specific channel
 
 Example:
 /unallow_channel 987654321"""
 
         await bot.send_message(user_id, error_text)
-        return
 
-    channel_id = parts[1]
+
+async def _show_allowlist_selection(user_id: int, bot: 'TelegramBot'):
+    """
+    Show interactive allowlist selection dialog.
+
+    Args:
+        user_id: Telegram user ID
+        bot: TelegramBot instance
+    """
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.allowlist_dao import AllowlistDAO
+    from ..services.allowlist import get_channel_display_name
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get all allowed channels
+            channels = await AllowlistDAO.get_all_channels(conn, platform='discord', enabled_only=True)
+
+            if not channels:
+                await bot.send_message(
+                    user_id,
+                    "ℹ️ No channels in allowlist.\n\nUse /allow_channel to add channels."
+                )
+                return
+
+            # Build message text
+            text = "📋 Select Channel to Remove\n\n"
+            text += "Current allowlist:\n\n"
+
+            # Build inline keyboard with channel selection buttons
+            keyboard_rows = []
+
+            for channel in channels[:20]:  # Limit to 20 channels for UI
+                display_name = get_channel_display_name(
+                    channel.get('server_id'),
+                    channel.get('channel_id')
+                )
+                allowlist_id = channel.get('id')
+
+                # Add to text
+                platform_emoji = "💬" if channel.get('platform') == 'telegram' else "📝"
+                text += f"{platform_emoji} {display_name}\n"
+
+                # Add button for this channel
+                keyboard_rows.append([{
+                    'text': f"❌ Remove: {display_name[:30]}...",
+                    'callback_data': f'unallow_select_{allowlist_id}'
+                }])
+
+            if len(channels) > 20:
+                text += f"\n... and {len(channels) - 20} more channel(s)"
+
+            # Add cancel button at the bottom
+            keyboard_rows.append([{
+                'text': '🔙 Cancel',
+                'callback_data': 'unallow_cancel'
+            }])
+
+            keyboard = {'inline_keyboard': keyboard_rows}
+
+            await bot.send_message(user_id, text, reply_markup=keyboard)
+            logger.info(f"Showed allowlist selection to user {user_id}, {len(channels)} channels")
+
+    except Exception as e:
+        logger.error(f"Error showing allowlist selection: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error loading allowlist: {str(e)}")
+
+
+async def _unallow_channel_by_id(message: dict, bot: 'TelegramBot', channel_id: str):
+    """
+    Legacy mode: Remove channel by ID directly.
+
+    Args:
+        message: Telegram message dict
+        bot: TelegramBot instance
+        channel_id: Channel ID to remove
+    """
+    user_id = message['from']['id']
 
     # Validate ID is numeric
     if not channel_id.isdigit():
@@ -440,17 +563,24 @@ Example:
     with bot.db.session_scope() as session:
         from ..database.dao import AllowlistDAO
 
-        AllowlistDAO.remove_channel(session, channel_id, platform='discord')
+        removed = AllowlistDAO.remove_channel(session, channel_id, platform='discord')
 
-        success_text = f"""✅ Channel Removed from Allowlist
+        if removed:
+            success_text = f"""✅ Channel Removed from Allowlist
 
 Channel ID: {channel_id}
 
 Messages from this channel will no longer be monitored."""
+        else:
+            success_text = f"""⚠️ Channel Not Found
+
+Channel ID: {channel_id}
+
+This channel was not in the allowlist."""
 
         await bot.send_message(user_id, success_text)
 
-    logger.info(f"Channel {channel_id} removed from allowlist by user {user_id}")
+    logger.info(f"Channel {channel_id} removed from allowlist by user {user_id} (legacy mode)")
 
 
 async def cmd_settings(message: dict, bot: 'TelegramBot'):
@@ -458,35 +588,94 @@ async def cmd_settings(message: dict, bot: 'TelegramBot'):
     Handle /settings command.
 
     Display current settings with inline keyboard for editing.
+    Shows actual allowlist from database and provides action buttons.
     """
     user_id = message['from']['id']
 
-    # TODO: Get actual settings from database
-    settings_text = """⚙️ Current Settings
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.allowlist_dao import AllowlistDAO
+    from ..services.allowlist import format_allowlist_display
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            from ..database.dao.user_dao import UserDAO
+
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Get Discord status
+            discord_status = "❌ Not Connected"
+            with bot.db.session_scope() as session:
+                from ..database.dao import DiscordDAO
+                discord_conn = DiscordDAO.get_discord_connection(session, user_id_db)
+                if discord_conn and discord_conn.get('status') == 'connected':
+                    discord_status = "✅ Connected"
+
+            # Get DND status
+            from ..services.dnd import get_dnd_settings, is_dnd_active
+            dnd_settings = await get_dnd_settings(conn, user_id_db)
+            dnd_status = "🔕 Enabled" if dnd_settings.get('dnd_enabled') else "🔔 Disabled"
+            is_active = await is_dnd_active(conn, user_id_db)
+            if is_active:
+                dnd_status += " (Active now)"
+
+            # Get allowlist channels
+            channels = await AllowlistDAO.get_all_channels(conn, platform='discord', enabled_only=True)
+            channel_count = len(channels)
+
+            # Format allowlist display
+            if channels:
+                allowlist_display = format_allowlist_display(channels, max_display=5)
+            else:
+                allowlist_display = "Empty"
+
+            # Build settings text
+            settings_text = f"""⚙️ Current Settings
 
 🎮 Discord:
-  • Status: Not Connected
-  • Token: Not configured
+  • Status: {discord_status}
 
 📋 Monitoring:
-  • Channels: 0
-  • Allowlist: Empty
+  • Channels: {channel_count}
+
+Allowlist (top 5):
+{allowlist_display}
 
 ⏸️ Do Not Disturb:
-  • Status: Disabled
-  • Schedule: None
+  • Status: {dnd_status}
+  • Schedule: {"Configured" if dnd_settings.get('dnd_schedule_json') else "None"}
 
 🔔 Notifications:
   • Enabled: Yes
-  • Context Window: 10 messages
+  • Context Window: 10 messages"""
 
-Use specific commands to change settings:
-/setup_discord - Configure Discord
-/dnd - Toggle DND mode
-/allow_channel - Add channels"""
+            # Create action buttons keyboard
+            keyboard = {
+                'inline_keyboard': [
+                    [
+                        {'text': '➕ Add Channel', 'callback_data': 'settings_add_channel'},
+                        {'text': '➖ Remove Channel', 'callback_data': 'settings_remove_channel'}
+                    ],
+                    [
+                        {'text': '🔕 Toggle DND', 'callback_data': 'toggle_dnd'},
+                        {'text': '🔄 Refresh', 'callback_data': 'settings_refresh'}
+                    ]
+                ]
+            }
 
-    await bot.send_message(user_id, settings_text)
-    logger.info(f"Settings displayed for user {user_id}")
+            await bot.send_message(user_id, settings_text, reply_markup=keyboard)
+            logger.info(f"Settings displayed for user {user_id}, {channel_count} channels in allowlist")
+
+    except Exception as e:
+        logger.error(f"Error showing settings: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error loading settings: {str(e)}")
 
 
 async def cmd_cancel(message: dict, bot: 'TelegramBot'):
@@ -1055,19 +1244,129 @@ async def callback_retry(query: dict, bot: 'TelegramBot'):
         await bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 
-async def callback_toggle_dnd(query: dict, bot: 'TelegramBot'):
+async def callback_dnd_toggle_confirm(query: dict, bot: 'TelegramBot'):
     """
-    Handle toggle_dnd callback.
+    Handle confirm_toggle_dnd_{state} callback.
 
-    Toggle Do Not Disturb mode.
+    Execute DND toggle after user confirmation.
+    """
+    user_id = query['from']['id']
+    message = query['message']
+    chat_id = message['chat']['id']
+    data = query['data']
+
+    # Get user state to retrieve pending action
+    state_data = bot.get_user_state(user_id)
+
+    if not state_data or state_data.get('state') != 'awaiting_dnd_confirmation':
+        await bot.send_message(chat_id, "❌ No pending DND action found.")
+        logger.warning(f"DND confirmation callback without proper state for user {user_id}")
+        return
+
+    # Extract new state and user_id_db from state
+    pending_data = state_data.get('data', {})
+    new_state = pending_data.get('new_state')
+    user_id_db = pending_data.get('user_id_db')
+
+    if new_state is None or user_id_db is None:
+        await bot.send_message(chat_id, "❌ Invalid confirmation state.")
+        logger.error(f"Missing data in DND confirmation state for user {user_id}")
+        bot.clear_user_state(user_id)
+        return
+
+    # Update DND setting in database
+    from ..database.connection import get_asyncpg_pool
+    from ..services.dnd import update_dnd_settings
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            await update_dnd_settings(conn, user_id_db, dnd_enabled=new_state)
+
+        # Send success message
+        if new_state:
+            success_msg = "🔕 **DND Mode: ON**\n\nYou will not receive message cards."
+        else:
+            success_msg = "🔔 **DND Mode: OFF**\n\nYou will receive message cards normally."
+
+        await bot.send_message(chat_id, success_msg, parse_mode='Markdown')
+
+        logger.info(f"DND {'enabled' if new_state else 'disabled'} by user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating DND setting for user {user_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error updating DND mode: {str(e)}")
+
+    finally:
+        # Clear user state
+        bot.clear_user_state(user_id)
+
+
+async def callback_dnd_toggle_cancel(query: dict, bot: 'TelegramBot'):
+    """
+    Handle cancel_toggle_dnd callback.
+
+    Cancel DND toggle action without making changes.
     """
     user_id = query['from']['id']
     message = query['message']
     chat_id = message['chat']['id']
 
-    # TODO: Toggle DND in database
-    await bot.send_message(chat_id, "⏸️ DND toggled (Not fully implemented yet)")
-    logger.info(f"User {user_id} toggled DND mode")
+    # Clear user state
+    bot.clear_user_state(user_id)
+
+    await bot.send_message(chat_id, "❌ DND toggle cancelled. No changes made.")
+    logger.info(f"User {user_id} cancelled DND toggle")
+
+
+async def callback_toggle_dnd(query: dict, bot: 'TelegramBot'):
+    """
+    Handle toggle_dnd callback (legacy - for backwards compatibility).
+
+    Toggle Do Not Disturb mode from message card buttons.
+    Shows confirmation dialog before toggling.
+    """
+    user_id = query['from']['id']
+    message = query['message']
+    chat_id = message['chat']['id']
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.dnd import get_dnd_settings
+    from .confirmations import create_dnd_toggle_confirmation, ConfirmationBuilder
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(chat_id, "❌ User not found.")
+                return
+
+            user_id_db = user['id']
+
+            # Get current DND state
+            settings = await get_dnd_settings(conn, user_id_db)
+            current_state = settings['dnd_enabled']
+
+            # Create confirmation dialog
+            dialog = create_dnd_toggle_confirmation(current_state)
+            text_msg, keyboard = ConfirmationBuilder.format_confirmation(dialog)
+
+            # Store pending action in user state
+            bot.set_user_state(user_id, 'awaiting_dnd_confirmation', {
+                'new_state': not current_state,
+                'user_id_db': user_id_db
+            })
+
+            await bot.send_message(chat_id, text_msg, reply_markup=keyboard, parse_mode='Markdown')
+            logger.info(f"DND toggle confirmation shown to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error showing DND toggle confirmation: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 
 # =============================================================================
@@ -1580,6 +1879,285 @@ async def callback_more_variants(query: dict, bot: 'TelegramBot'):
         await bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 
+async def callback_unallow_select(query: dict, bot: 'TelegramBot'):
+    """
+    Handle unallow_select_{allowlist_id} callback.
+
+    User selected a channel to remove from allowlist, show confirmation.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+
+    # Extract allowlist_id from callback data
+    try:
+        allowlist_id = int(data.split('_')[2])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.send_message(chat_id, "❌ Error: Invalid callback data")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.allowlist_dao import AllowlistDAO
+    from ..services.allowlist import get_channel_display_name
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get channel details
+            channel = await AllowlistDAO.get_channel_by_id(conn, allowlist_id)
+
+            if not channel:
+                await bot.send_message(chat_id, "❌ Channel not found in allowlist")
+                return
+
+            # Get display name
+            display_name = get_channel_display_name(
+                channel.get('server_id'),
+                channel.get('channel_id')
+            )
+
+            # Show confirmation dialog
+            confirmation_text = f"""⚠️ Confirm Removal
+
+Are you sure you want to remove this channel from allowlist?
+
+{display_name}
+
+This will stop monitoring messages from this channel."""
+
+            keyboard = {
+                'inline_keyboard': [
+                    [
+                        {'text': '✅ Confirm Removal', 'callback_data': f'unallow_confirm_{allowlist_id}'},
+                        {'text': '❌ Cancel', 'callback_data': 'unallow_cancel'}
+                    ]
+                ]
+            }
+
+            await bot.send_message(chat_id, confirmation_text, reply_markup=keyboard)
+            logger.info(f"User {user_id} requested confirmation to remove allowlist {allowlist_id}")
+
+    except Exception as e:
+        logger.error(f"Error processing unallow_select: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+
+
+async def callback_unallow_confirm(query: dict, bot: 'TelegramBot'):
+    """
+    Handle unallow_confirm_{allowlist_id} callback.
+
+    Actually remove the channel from allowlist after confirmation.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+
+    # Extract allowlist_id from callback data
+    try:
+        allowlist_id = int(data.split('_')[2])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.send_message(chat_id, "❌ Error: Invalid callback data")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.allowlist_dao import AllowlistDAO
+    from ..services.allowlist import get_channel_display_name
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get channel details before removal
+            channel = await AllowlistDAO.get_channel_by_id(conn, allowlist_id)
+
+            if not channel:
+                await bot.send_message(chat_id, "❌ Channel not found in allowlist")
+                return
+
+            channel_id = channel.get('channel_id')
+            platform = channel.get('platform', 'discord')
+
+            # Remove channel
+            removed = await AllowlistDAO.remove_channel(conn, channel_id, platform=platform)
+
+            if removed:
+                display_name = get_channel_display_name(
+                    channel.get('server_id'),
+                    channel.get('channel_id')
+                )
+
+                success_text = f"""✅ Channel Removed from Allowlist
+
+{display_name}
+
+Messages from this channel will no longer be monitored."""
+
+                await bot.send_message(chat_id, success_text)
+                logger.info(f"User {user_id} removed allowlist entry {allowlist_id} (channel {channel_id})")
+            else:
+                await bot.send_message(chat_id, "❌ Failed to remove channel from allowlist")
+
+    except Exception as e:
+        logger.error(f"Error confirming unallow: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+
+
+async def callback_unallow_cancel(query: dict, bot: 'TelegramBot'):
+    """
+    Handle unallow_cancel callback.
+
+    Cancel the unallow operation.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    await bot.send_message(chat_id, "❌ Operation cancelled. No changes made to allowlist.")
+    logger.info(f"User {user_id} cancelled unallow operation")
+
+
+async def callback_settings_add_channel(query: dict, bot: 'TelegramBot'):
+    """
+    Handle settings_add_channel callback.
+
+    Guide user to add a channel to allowlist.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    help_text = """➕ Add Channel to Allowlist
+
+To add a channel, use:
+/allow_channel <server_id> <channel_id>
+
+📝 How to get IDs:
+1. Enable Developer Mode in Discord settings
+2. Right-click server/channel
+3. Click "Copy ID"
+
+Example:
+/allow_channel 123456789 987654321"""
+
+    await bot.send_message(chat_id, help_text)
+    logger.info(f"User {user_id} requested help to add channel")
+
+
+async def callback_settings_remove_channel(query: dict, bot: 'TelegramBot'):
+    """
+    Handle settings_remove_channel callback.
+
+    Show allowlist selection for removal.
+    """
+    user_id = query['from']['id']
+
+    # Reuse the _show_allowlist_selection function
+    await _show_allowlist_selection(user_id, bot)
+    logger.info(f"User {user_id} requested channel removal from settings")
+
+
+async def callback_settings_refresh(query: dict, bot: 'TelegramBot'):
+    """
+    Handle settings_refresh callback.
+
+    Refresh the settings display.
+    """
+    user_id = query['from']['id']
+    message_id = query['message']['message_id']
+    chat_id = query['message']['chat']['id']
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.allowlist_dao import AllowlistDAO
+    from ..services.allowlist import format_allowlist_display
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            from ..database.dao.user_dao import UserDAO
+
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Get Discord status
+            discord_status = "❌ Not Connected"
+            with bot.db.session_scope() as session:
+                from ..database.dao import DiscordDAO
+                discord_conn = DiscordDAO.get_discord_connection(session, user_id_db)
+                if discord_conn and discord_conn.get('status') == 'connected':
+                    discord_status = "✅ Connected"
+
+            # Get DND status
+            from ..services.dnd import get_dnd_settings, is_dnd_active
+            dnd_settings = await get_dnd_settings(conn, user_id_db)
+            dnd_status = "🔕 Enabled" if dnd_settings.get('dnd_enabled') else "🔔 Disabled"
+            is_active = await is_dnd_active(conn, user_id_db)
+            if is_active:
+                dnd_status += " (Active now)"
+
+            # Get allowlist channels
+            channels = await AllowlistDAO.get_all_channels(conn, platform='discord', enabled_only=True)
+            channel_count = len(channels)
+
+            # Format allowlist display
+            if channels:
+                allowlist_display = format_allowlist_display(channels, max_display=5)
+            else:
+                allowlist_display = "Empty"
+
+            # Build settings text
+            settings_text = f"""⚙️ Current Settings (Refreshed)
+
+🎮 Discord:
+  • Status: {discord_status}
+
+📋 Monitoring:
+  • Channels: {channel_count}
+
+Allowlist (top 5):
+{allowlist_display}
+
+⏸️ Do Not Disturb:
+  • Status: {dnd_status}
+  • Schedule: {"Configured" if dnd_settings.get('dnd_schedule_json') else "None"}
+
+🔔 Notifications:
+  • Enabled: Yes
+  • Context Window: 10 messages"""
+
+            # Create action buttons keyboard
+            keyboard = {
+                'inline_keyboard': [
+                    [
+                        {'text': '➕ Add Channel', 'callback_data': 'settings_add_channel'},
+                        {'text': '➖ Remove Channel', 'callback_data': 'settings_remove_channel'}
+                    ],
+                    [
+                        {'text': '🔕 Toggle DND', 'callback_data': 'toggle_dnd'},
+                        {'text': '🔄 Refresh', 'callback_data': 'settings_refresh'}
+                    ]
+                ]
+            }
+
+            # Try to edit the original message
+            success = await bot.edit_message(chat_id, message_id, settings_text, reply_markup=keyboard)
+            if not success:
+                # If edit failed, send a new message
+                await bot.send_message(user_id, settings_text, reply_markup=keyboard)
+
+            logger.info(f"Settings refreshed for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error refreshing settings: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error refreshing settings: {str(e)}")
+
+
 # =============================================================================
 # Handler Registration
 # =============================================================================
@@ -1610,10 +2188,22 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_callback_handler('confirm_', callback_confirm)
     bot.register_callback_handler('retry_', callback_retry)
     bot.register_callback_handler('toggle_dnd', callback_toggle_dnd)
+    bot.register_callback_handler('confirm_toggle_dnd', callback_dnd_toggle_confirm)
+    bot.register_callback_handler('cancel_toggle_dnd', callback_dnd_toggle_cancel)
     bot.register_callback_handler('cancel_reply', callback_cancel_reply)
     bot.register_callback_handler('use_variant_', callback_use_variant)
     bot.register_callback_handler('soften_', callback_soften)
     bot.register_callback_handler('more_variants_', callback_more_variants)
+
+    # Allowlist management callbacks
+    bot.register_callback_handler('unallow_select_', callback_unallow_select)
+    bot.register_callback_handler('unallow_confirm_', callback_unallow_confirm)
+    bot.register_callback_handler('unallow_cancel', callback_unallow_cancel)
+
+    # Settings callbacks
+    bot.register_callback_handler('settings_add_channel', callback_settings_add_channel)
+    bot.register_callback_handler('settings_remove_channel', callback_settings_remove_channel)
+    bot.register_callback_handler('settings_refresh', callback_settings_refresh)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

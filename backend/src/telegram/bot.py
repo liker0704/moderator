@@ -388,7 +388,8 @@ class TelegramBot:
         chat_id: int,
         message_id: int,
         text: str,
-        reply_markup: Optional[dict] = None
+        reply_markup: Optional[dict] = None,
+        parse_mode: Optional[str] = None
     ) -> bool:
         """
         Edit an existing message.
@@ -398,6 +399,7 @@ class TelegramBot:
             message_id: Message ID to edit
             text: New message text
             reply_markup: Optional new inline keyboard
+            parse_mode: Optional parse mode ('Markdown' or 'HTML')
 
         Returns:
             True if successful, False otherwise
@@ -415,6 +417,9 @@ class TelegramBot:
 
         if reply_markup:
             data['reply_markup'] = reply_markup
+
+        if parse_mode:
+            data['parse_mode'] = parse_mode
 
         try:
             async with self.session.post(

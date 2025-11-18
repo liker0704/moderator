@@ -1,0 +1,122 @@
+{
+  "errors": {
+    "ERR-USER-001": {
+      "title": "User Not Found",
+      "description": "The requested user does not exist in the database or could not be located.",
+      "severity": "ERROR",
+      "recovery_steps": [
+        "Verify the user ID or Telegram user ID is correct",
+        "Check if the user has completed /start command to register",
+        "Try using /start to create a new user account"
+      ],
+      "example": "User with Telegram ID 123456789 not found in the system"
+    },
+    "ERR-USER-002": {
+      "title": "User Unauthorized",
+      "description": "The user does not have permission to perform this action or access this resource.",
+      "severity": "WARNING",
+      "recovery_steps": [
+        "Ensure you have completed the initial setup with /setup_discord",
+        "Verify your Discord token is valid and active",
+        "Contact the administrator if you believe this is an error"
+      ],
+      "example": null
+    },
+    "ERR-DISCORD-001": {
+      "title": "Discord Token Invalid",
+      "description": "The provided Discord user token is invalid, expired, or has been revoked.",
+      "severity": "CRITICAL",
+      "recovery_steps": [
+        "Obtain a fresh Discord user token from your browser",
+        "Use /setup_discord command to update your token",
+        "Ensure the token is copied completely without extra spaces",
+        "Verify the token format matches: 'MTxxxxxxxxx.xxxxxx.xxxxxxxxxxx'"
+      ],
+      "example": "Use browser DevTools > Network > XHR > Look for 'authorization' header"
+    },
+    "ERR-DISCORD-002": {
+      "title": "Discord Connection Failed",
+      "description": "Unable to establish or maintain connection to Discord Gateway. This may be due to network issues, Discord API downtime, or authentication problems.",
+      "severity": "CRITICAL",
+      "recovery_steps": [
+        "Check your internet connection",
+        "Verify Discord API status at https://discordstatus.com",
+        "Wait a few minutes and the system will attempt to reconnect automatically",
+        "If the issue persists, update your Discord token using /setup_discord"
+      ],
+      "example": null
+    },
+    "ERR-CHANNEL-001": {
+      "title": "Invalid Channel ID",
+      "description": "The specified Discord channel ID is malformed or does not exist.",
+      "severity": "ERROR",
+      "recovery_steps": [
+        "Verify the channel ID is a valid Discord snowflake (numeric string)",
+        "Enable Developer Mode in Discord settings to copy channel IDs",
+        "Right-click the channel and select 'Copy ID'",
+        "Ensure the channel exists and you have access to it"
+      ],
+      "example": "Channel ID should look like: 1234567890123456789"
+    },
+    "ERR-CHANNEL-002": {
+      "title": "Channel Not in Allowlist",
+      "description": "The channel is not in your monitoring allowlist. Messages from non-allowlisted channels are ignored to reduce noise.",
+      "severity": "WARNING",
+      "recovery_steps": [
+        "Use /allow_channel command to add the channel to your allowlist",
+        "Verify the channel ID is correct",
+        "Check your current allowlist with /settings command"
+      ],
+      "example": "Use: /allow_channel 1234567890123456789"
+    },
+    "ERR-DB-001": {
+      "title": "Database Connection Failed",
+      "description": "Unable to connect to or query the PostgreSQL database. This is a critical system error that prevents normal operation.",
+      "severity": "CRITICAL",
+      "recovery_steps": [
+        "Check if the database container is running: docker ps",
+        "Verify database credentials in .env file",
+        "Check database logs: docker logs moderator-db",
+        "Restart the database container if needed",
+        "Contact system administrator if the issue persists"
+      ],
+      "example": null
+    },
+    "ERR-REPLY-001": {
+      "title": "Failed to Post Reply",
+      "description": "Unable to post the moderator's reply to the target platform (Discord or Telegram). This may be due to API errors, rate limiting, or invalid content.",
+      "severity": "ERROR",
+      "recovery_steps": [
+        "Use the 'Retry' button to attempt posting again",
+        "Check if your message contains valid content and attachments",
+        "Verify the target channel/chat still exists and is accessible",
+        "Wait a moment if rate limiting is in effect",
+        "Contact support if retries continue to fail"
+      ],
+      "example": null
+    },
+    "ERR-SYSTEM-001": {
+      "title": "Invalid Usage",
+      "description": "The command or action was used incorrectly or with invalid parameters.",
+      "severity": "INFO",
+      "recovery_steps": [
+        "Check the command syntax and required parameters",
+        "Use /help to see available commands and their usage",
+        "Refer to the documentation for detailed examples"
+      ],
+      "example": "Use: /allow_channel <channel_id>"
+    },
+    "ERR-SYSTEM-002": {
+      "title": "Generic Error",
+      "description": "An unexpected error occurred. This is a catch-all error for unhandled exceptions.",
+      "severity": "ERROR",
+      "recovery_steps": [
+        "Try the action again after a brief wait",
+        "Check the application logs for more details",
+        "Report the issue with the Request ID if it persists",
+        "Contact system administrator for assistance"
+      ],
+      "example": null
+    }
+  }
+}

@@ -437,3 +437,87 @@ async def get_allowlist_channels(
             exc_info=True
         )
         raise
+
+
+def get_channel_display_name(
+    server_id: Optional[str],
+    channel_id: str,
+    use_cache: bool = True
+) -> str:
+    """
+    Get human-readable channel display name.
+
+    For MVP, returns formatted IDs since Discord API integration is out of scope.
+    Future versions can integrate with Discord API to get actual names.
+
+    Args:
+        server_id: Server/guild ID (optional, None for Telegram)
+        channel_id: Channel ID
+        use_cache: Whether to use cached names (reserved for future use)
+
+    Returns:
+        Formatted display name (e.g., "Server 12345... > Channel 67890...")
+
+    Example:
+        >>> name = get_channel_display_name("123456789", "987654321")
+        >>> print(name)  # "Server 12345... > Channel 98765..."
+    """
+    # For MVP, use simplified format with truncated IDs
+    if server_id:
+        # Discord channel with server
+        server_short = str(server_id)[:8] if len(str(server_id)) > 8 else str(server_id)
+        channel_short = str(channel_id)[:8] if len(str(channel_id)) > 8 else str(channel_id)
+        return f"Server {server_short}... > Channel {channel_short}..."
+    else:
+        # Telegram or other platform without server concept
+        channel_short = str(channel_id)[:12] if len(str(channel_id)) > 12 else str(channel_id)
+        return f"Channel {channel_short}..."
+
+
+def format_allowlist_display(
+    channels: List[Dict[str, Any]],
+    max_display: int = 10
+) -> str:
+    """
+    Format allowlist channels for display in Telegram message.
+
+    Args:
+        channels: List of channel dictionaries from AllowlistDAO
+        max_display: Maximum number of channels to display (default: 10)
+
+    Returns:
+        Formatted string with channel list
+
+    Example:
+        >>> channels = [
+        ...     {'platform': 'discord', 'server_id': '123', 'channel_id': '456', 'id': 1},
+        ...     {'platform': 'telegram', 'server_id': None, 'channel_id': '789', 'id': 2}
+        ... ]
+        >>> print(format_allowlist_display(channels))
+    """
+    if not channels:
+        return "No channels in allowlist"
+
+    lines = []
+    for idx, channel in enumerate(channels[:max_display], 1):
+        platform = channel.get('platform', 'unknown')
+        server_id = channel.get('server_id')
+        channel_id = channel.get('channel_id', 'unknown')
+        allowlist_id = channel.get('id', 'N/A')
+
+        # Get display name
+        display_name = get_channel_display_name(server_id, channel_id)
+
+        # Platform emoji
+        platform_emoji = "💬" if platform == 'telegram' else "📝"
+
+        # Format line
+        lines.append(f"{idx}. {platform_emoji} {display_name} (ID: {allowlist_id})")
+
+    result = "\n".join(lines)
+
+    # Add note if there are more channels
+    if len(channels) > max_display:
+        result += f"\n\n... and {len(channels) - max_display} more channel(s)"
+
+    return result

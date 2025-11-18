@@ -140,16 +140,20 @@
 - [x] Markdown formatting для напоминаний
 - [x] Task age и interval фильтрация
 
-#### 5. Команды управления allowlist (1 день)
-- [ ] Улучшенный /allow_channel (с диалогом выбора)
-- [ ] /unallow_channel
-- [ ] Список allowlist в /settings
+#### 5. Команды управления allowlist (1 день) ✅ COMPLETE (v0.2 Iteration 7)
+- [x] /unallow_channel с диалогом выбора (interactive mode)
+- [x] /unallow_channel <channel_id> (legacy mode)
+- [x] Список allowlist в /settings с действительными данными из БД
+- [x] Confirmation flow для удаления каналов
+- [x] Action buttons в /settings
 
-#### 6. Улучшения UX (2 дня)
-- [ ] Более информативные ошибки
-- [ ] Прогресс-бары (опционально)
-- [ ] Подтверждения действий
-- [ ] /help с категориями
+#### 6. Улучшения UX (2 дня) ✅ COMPLETE (v0.2 Iteration 7)
+- [x] Более информативные ошибки (error codes system, ERR-XXX-NNN)
+- [x] Подтверждения действий (confirmation dialogs framework)
+- [x] /help с категориями (5 категорий: setup, manage, cards, troubleshoot, ai)
+- [x] Error recovery suggestions
+- [x] Request ID tracking для ошибок
+- [ ] Прогресс-бары (отложено)
 
 #### 7. Мониторинг LLM (1 день) ✅ COMPLETE (v0.2 Iteration 6)
 - [x] Логирование запросов к LLM (llm_requests table)

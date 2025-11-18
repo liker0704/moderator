@@ -110,11 +110,11 @@ class Config:
     # Telegram
     telegram: TelegramConfig
 
-    # Discord (optional)
-    discord: Optional[DiscordConfig] = None
-
     # Security
     encryption_key: str
+
+    # Discord (optional)
+    discord: Optional[DiscordConfig] = None
 
     # LLM (optional, for v0.2+)
     llm: Optional[LLMConfig] = None

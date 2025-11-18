@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: v0.2 Iteration 6
-**Status**: v0.2 Infrastructure & Monitoring Complete ✅
+**Version**: v0.2 Iteration 7
+**Status**: v0.2 UX Improvements Complete ✅
 **Last Updated**: November 18, 2025
 
 ---
@@ -98,12 +98,19 @@ This system is designed for a **single moderator** (single-user system).
 - ✅ Automated reminder system (30-min intervals, max 3 per task)
 - ✅ DND integration for reminders
 
+**UX Improvements** (Iteration 7)
+- ✅ Centralized error handling with error codes (ERR-XXX-NNN format)
+- ✅ Categorized help system with 5 categories and interactive navigation
+- ✅ Enhanced /unallow_channel with selection dialog and confirmation
+- ✅ Enhanced /settings with actual allowlist display from database
+- ✅ Confirmation dialogs for destructive actions (DND toggle, channel removal)
+- ✅ Error recovery suggestions and request ID tracking
+
 ### Planned Features
 
-**v0.2** (In Progress)
-- Enhanced allowlist management commands
-- UX improvements
-- Additional tests
+**v0.2** (Remaining)
+- Additional integration tests
+- Performance optimizations
 
 **v1.0** (Future)
 - Multi-server support
