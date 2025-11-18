@@ -17,11 +17,21 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime
 from typing import Optional, Dict, Any, Callable
 import websockets
 from websockets.client import WebSocketClientProtocol
 
 from .utils import parse_super_properties, validate_discord_token, format_discord_timestamp
+from database.connection import get_asyncpg_pool
+from database.dao.allowlist_dao import AllowlistDAO
+from database.dao.message_dao import MessageDAO
+from database.dao.attachment_dao import AttachmentDAO
+from database.dao.task_dao import TaskDAO
+from database.dao.user_dao import UserDAO
+from services.dnd import is_dnd_active
+from services.alerts import send_error_alert
+from config import get_config
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -464,7 +474,8 @@ class DiscordGatewayManager:
         token: str,
         super_properties: Optional[Dict[str, Any]] = None,
         db_connection=None,
-        config=None
+        config=None,
+        on_new_task_callback: Optional[Callable] = None
     ):
         """
         Initialize Gateway manager.
@@ -474,11 +485,13 @@ class DiscordGatewayManager:
             super_properties: Discord super properties
             db_connection: Database connection (for storing messages/tasks)
             config: Application configuration
+            on_new_task_callback: Async callback for new task creation (task_id, message_id)
         """
         self.token = token
         self.super_properties = super_properties
         self.db_connection = db_connection
         self.config = config
+        self.on_new_task_callback = on_new_task_callback
 
         self.client: Optional[DiscordGatewayClient] = None
         self._running = False
@@ -543,11 +556,13 @@ class DiscordGatewayManager:
         """
         Process MESSAGE_CREATE event.
 
-        This should:
+        This implements the complete message processing flow:
         1. Check if channel is in allowlist
-        2. Check if author is in channel allowlist (skip if yes)
+        2. Check if DND is active for moderator
         3. Store message in database
-        4. Create task for moderator
+        4. Store attachments in database
+        5. Create task for moderator
+        6. Trigger Telegram notification callback
 
         Args:
             message_data: MESSAGE_CREATE payload
@@ -556,28 +571,191 @@ class DiscordGatewayManager:
         message_id = message_data.get("id")
         channel_id = message_data.get("channel_id")
         guild_id = message_data.get("guild_id")
+        thread_id = message_data.get("thread_id")
         author = message_data.get("author", {})
         author_id = author.get("id")
         author_username = author.get("username")
         content = message_data.get("content", "")
-        timestamp = message_data.get("timestamp")
+        timestamp_str = message_data.get("timestamp")
         attachments = message_data.get("attachments", [])
 
-        # TODO: Implement actual database storage and task creation
-        # This would require:
-        # 1. Check channels_allowlist table
-        # 2. Check user allowlist for this channel
-        # 3. Store in messages table
-        # 4. Store attachments in attachments table
-        # 5. Create task in tasks table
-        # 6. Send notification to Telegram
-
         logger.info(
-            f"Processing message {message_id} from {author_username} "
-            f"in channel {channel_id}"
+            f"Processing message {message_id} from {author_username} ({author_id}) "
+            f"in channel {channel_id} (guild: {guild_id}, thread: {thread_id})"
         )
 
-        # Placeholder for database integration
-        # if self.db_connection:
-        #     await self._store_message_to_db(message_data)
-        #     await self._create_moderator_task(message_data)
+        try:
+            # Get database pool
+            db_pool = get_asyncpg_pool()
+            config = get_config()
+
+            async with db_pool.acquire() as conn:
+                # Step 1: Check if channel is in allowlist
+                is_allowed = await AllowlistDAO.is_channel_allowed(
+                    conn=conn,
+                    platform='discord',
+                    channel_id=channel_id,
+                    server_id=guild_id,
+                    thread_id=thread_id
+                )
+
+                if not is_allowed:
+                    logger.info(
+                        f"Message {message_id} skipped: channel {channel_id} "
+                        f"(guild: {guild_id}, thread: {thread_id}) not in allowlist"
+                    )
+                    return
+
+                logger.info(f"Channel {channel_id} is in allowlist, proceeding with processing")
+
+                # Step 2: Get moderator user and check DND status
+                moderator_tg_id = config.telegram.moderator_user_id
+                moderator_user = await UserDAO.get_user_by_tg_id(conn, moderator_tg_id)
+
+                if not moderator_user:
+                    # Create moderator user if doesn't exist
+                    logger.info(f"Creating new moderator user with tg_id {moderator_tg_id}")
+                    moderator_user = await UserDAO.get_or_create_user(
+                        conn, moderator_tg_id, username="moderator"
+                    )
+
+                moderator_user_id = moderator_user['id']
+
+                # Check if DND is active
+                dnd_active = await is_dnd_active(conn, moderator_user_id)
+                if dnd_active:
+                    logger.info(
+                        f"Message {message_id} received during DND mode - "
+                        f"will create task but with 'muted' status"
+                    )
+                    task_status = 'muted'
+                else:
+                    task_status = 'open'
+
+                # Step 3: Parse timestamp and save message to database
+                platform_created_at = None
+                if timestamp_str:
+                    try:
+                        # Discord timestamps are in ISO 8601 format
+                        platform_created_at = datetime.fromisoformat(
+                            timestamp_str.replace('Z', '+00:00')
+                        )
+                    except (ValueError, AttributeError) as e:
+                        logger.warning(f"Failed to parse timestamp '{timestamp_str}': {e}")
+
+                has_attachments = len(attachments) > 0
+
+                message_db_id = await MessageDAO.create_message(
+                    conn=conn,
+                    platform='discord',
+                    ext_message_id=message_id,
+                    channel_id=channel_id,
+                    server_id=guild_id,
+                    thread_id=thread_id,
+                    author_id=author_id,
+                    author_name=author_username,
+                    content=content,
+                    has_image=has_attachments,
+                    platform_created_at=platform_created_at
+                )
+
+                logger.info(f"Message saved to database with ID: {message_db_id}")
+
+                # Step 4: Save attachments to database
+                if attachments:
+                    logger.info(f"Processing {len(attachments)} attachment(s)")
+                    for attachment in attachments:
+                        url = attachment.get('url')
+                        filename = attachment.get('filename')
+                        content_type = attachment.get('content_type', '')
+                        size = attachment.get('size', 0)
+
+                        # Determine attachment kind based on content type
+                        if content_type.startswith('image/'):
+                            kind = 'image'
+                        elif content_type.startswith('video/'):
+                            kind = 'video'
+                        else:
+                            kind = 'file'
+
+                        # Create metadata JSON
+                        meta = json.dumps({
+                            'filename': filename,
+                            'content_type': content_type,
+                            'size': size
+                        })
+
+                        attachment_id = await AttachmentDAO.create_attachment(
+                            conn=conn,
+                            message_id=message_db_id,
+                            kind=kind,
+                            ref=url,
+                            meta=meta
+                        )
+
+                        logger.debug(
+                            f"Attachment saved: {kind} '{filename}' "
+                            f"(ID: {attachment_id}, size: {size} bytes)"
+                        )
+
+                # Step 5: Create moderator task
+                task_id = await TaskDAO.create_task(
+                    conn=conn,
+                    source_message_id=message_db_id,
+                    assignee_user_id=moderator_user_id,
+                    status=task_status
+                )
+
+                logger.info(
+                    f"Task created with ID: {task_id}, status: {task_status}, "
+                    f"assignee: {moderator_user_id}"
+                )
+
+                # Step 6: Trigger Telegram notification callback
+                if self.on_new_task_callback and task_status == 'open':
+                    logger.info(f"Triggering Telegram notification callback for task {task_id}")
+                    try:
+                        await self.on_new_task_callback(task_id, message_db_id)
+                    except Exception as callback_error:
+                        logger.error(
+                            f"Error in new task callback: {callback_error}",
+                            exc_info=True
+                        )
+                        # Don't fail the whole process if callback fails
+                        await send_error_alert(
+                            f"Failed to send Telegram notification for task {task_id}",
+                            context={
+                                'task_id': task_id,
+                                'message_id': message_db_id,
+                                'error': str(callback_error)
+                            },
+                            throttle_key=f"telegram_notification_error_{task_id}"
+                        )
+                elif task_status == 'muted':
+                    logger.info(
+                        f"Skipping Telegram notification for task {task_id} "
+                        f"(status: muted due to DND)"
+                    )
+
+                logger.info(
+                    f"Successfully processed message {message_id}: "
+                    f"message_db_id={message_db_id}, task_id={task_id}"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error processing message {message_id}: {e}",
+                exc_info=True
+            )
+            # Send error alert
+            await send_error_alert(
+                f"Failed to process Discord message {message_id}",
+                context={
+                    'message_id': message_id,
+                    'channel_id': channel_id,
+                    'guild_id': guild_id,
+                    'author': author_username,
+                    'error': str(e)
+                },
+                throttle_key=f"discord_message_error_{channel_id}"
+            )

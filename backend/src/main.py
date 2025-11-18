@@ -155,7 +155,8 @@ class ModeratorApplication:
                     token=self.config.discord.user_token,
                     super_properties=self.config.discord.super_properties,
                     db_connection=self.db,
-                    config=self.config
+                    config=self.config,
+                    on_new_task_callback=self.send_card_to_telegram
                 )
                 logger.info("Discord Gateway initialized")
             else:
@@ -455,7 +456,7 @@ class ModeratorApplication:
                 task_id = await AsyncTaskDAO.create_task(conn, message_id, user_id)
 
                 # 5. Send card to Telegram
-                await self.send_card_to_telegram(task_id, message_id, conn)
+                await self.send_card_to_telegram(task_id, message_id)
 
             logger.info(f"Processed Discord message {ext_message_id}, created task {task_id}")
 
@@ -507,60 +508,82 @@ class ModeratorApplication:
                     "Database connection unhealthy"
                 )
 
-    async def send_card_to_telegram(self, task_id: int, message_id: int, conn):
-        """Send message card to Telegram moderator."""
+    async def send_card_to_telegram(self, task_id: int, message_id: int):
+        """
+        Send a message card to Telegram when a new task is created.
+
+        Args:
+            task_id: ID of the newly created task
+            message_id: ID of the source Discord message
+        """
         try:
-            from database.dao import MessageDAO, AttachmentDAO, AsyncTaskDAO
-            from services.context import get_context_by_channel
-            from telegram.cards import format_card, create_card_keyboard
+            # Get async database connection from pool
+            conn = await get_asyncpg_pool().acquire()
 
-            # Get message
-            message = await MessageDAO.get_message_by_id(conn, message_id)
-            if not message:
-                logger.error(f"Message {message_id} not found for task {task_id}")
-                return
+            try:
+                # 1. Get message and attachments from database
+                message_record = await MessageDAO.get_message_by_id(conn, message_id)
+                if not message_record:
+                    logger.error(f"Message {message_id} not found for task {task_id}")
+                    return
 
-            # Load attachments for message
-            attachments = await AttachmentDAO.get_attachments_for_message(conn, message_id)
-            message['attachments'] = attachments  # Add to message dict for card formatting
+                # Convert asyncpg.Record to dict
+                message = dict(message_record)
 
-            # Get context (last 10 messages from same channel)
-            context_messages = await get_context_by_channel(
-                conn,
-                platform=message['platform'],
-                channel_id=message['channel_id'],
-                server_id=message['server_id'],
-                thread_id=message['thread_id'],
-                limit=10
-            )
+                # Load attachments
+                attachments = await AttachmentDAO.get_attachments_for_message(conn, message_id)
+                message['attachments'] = attachments
 
-            # Format card
-            card_text = format_card(message, context_messages)
-            keyboard = create_card_keyboard(task_id)
+                # 2. Load context messages (10 messages before current one)
+                context_messages = await get_context_by_channel(
+                    conn,
+                    platform=message['platform'],
+                    channel_id=message['channel_id'],
+                    server_id=message.get('server_id'),
+                    thread_id=message.get('thread_id'),
+                    before_message_id=message_id,
+                    limit=10
+                )
 
-            # Send via Telegram bot
-            result = await self.telegram_bot.send_message(
-                chat_id=self.config.telegram.moderator_user_id,
-                text=card_text,
-                reply_markup=keyboard,
-                disable_web_page_preview=True  # Disable link previews for cleaner cards
-            )
+                # Convert context messages (Message dataclass instances) to dicts
+                context_messages = [vars(msg) for msg in context_messages]
 
-            if result.get('ok'):
-                # Save Telegram message ID in task
-                tg_message_id = result['result']['message_id']
-                await AsyncTaskDAO.update_task_card_id(conn, task_id, tg_message_id)
-                logger.info(f"Sent card for task {task_id}, TG message {tg_message_id}")
-            else:
-                logger.error(f"Failed to send card for task {task_id}: {result.get('description')}")
-                await AsyncTaskDAO.update_task_status(conn, task_id, 'error', f"Failed to send card: {result.get('description')}")
+                # 3. Format card
+                card_text = format_card(message, context_messages)
+
+                # 4. Create keyboard
+                keyboard = create_card_keyboard(task_id, show_more=True)
+
+                # 5. Send to Telegram
+                result = await self.telegram_bot.send_message(
+                    chat_id=self.config.telegram.moderator_user_id,
+                    text=card_text,
+                    reply_markup=keyboard,
+                    parse_mode='Markdown',
+                    disable_web_page_preview=True
+                )
+
+                if result.get('ok'):
+                    # Save Telegram message ID in task
+                    tg_message_id = result['result']['message_id']
+                    await AsyncTaskDAO.update_task_card_id(conn, task_id, tg_message_id)
+                    logger.info(f"Sent card for task {task_id}, TG message {tg_message_id}")
+                else:
+                    logger.error(f"Failed to send card for task {task_id}: {result.get('description')}")
+                    await AsyncTaskDAO.update_task_status(conn, task_id, 'error', f"Failed to send card: {result.get('description')}")
+
+            finally:
+                # Always release the connection back to the pool
+                await get_asyncpg_pool().release(conn)
 
         except Exception as e:
             logger.error(f"Error sending card to Telegram: {e}", exc_info=True)
+            # Send error alert but don't crash the application
             await send_error_alert(
                 "Error sending card to Telegram",
                 context={
                     "task_id": task_id,
+                    "message_id": message_id,
                     "error": str(e)
                 },
                 throttle_key="telegram_card_error"
