@@ -12,6 +12,10 @@ asyncpg>=0.29.0
 psycopg2-binary>=2.9.9
 SQLAlchemy>=2.0.0
 
+# Redis and Queue
+arq>=0.25.0
+redis>=5.0.0
+
 # Encryption for storing Discord token
 cryptography>=41.0.0
 

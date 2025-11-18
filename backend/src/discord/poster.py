@@ -17,6 +17,7 @@ import asyncio
 import aiohttp
 from typing import Dict, Any, Optional
 from utils.logger import get_logger
+from services.rate_limiter import get_rate_limiter
 
 logger = get_logger(__name__)
 
@@ -49,7 +50,8 @@ class DiscordPoster:
         self.base_url = "https://discord.com/api/v9"
         self.max_retries = max_retries
         self.timeout = aiohttp.ClientTimeout(total=timeout)
-        logger.info("DiscordPoster initialized", extra={"platform": "discord"})
+        self.rate_limiter = get_rate_limiter()
+        logger.info("DiscordPoster initialized with rate limiting", extra={"platform": "discord"})
 
     def _get_headers(self) -> Dict[str, str]:
         """
@@ -72,9 +74,13 @@ class DiscordPoster:
         retry_count: int = 0
     ) -> Dict[str, Any]:
         """
-        Make an HTTP request to Discord API with retry logic.
+        Make an HTTP request to Discord API with retry logic and rate limiting.
 
-        Implements exponential backoff for retries and handles rate limiting.
+        Implements:
+        - Proactive rate limit checking before requests
+        - Response header-based bucket updates
+        - Exponential backoff for retries
+        - 429 response handling with proper wait times
 
         Args:
             method: HTTP method (GET, POST, PATCH, etc.)
@@ -87,6 +93,9 @@ class DiscordPoster:
         """
         url = f"{self.base_url}{endpoint}"
 
+        # Acquire rate limit before making request
+        await self.rate_limiter.acquire(endpoint)
+
         try:
             async with aiohttp.ClientSession(timeout=self.timeout) as session:
                 async with session.request(
@@ -95,18 +104,32 @@ class DiscordPoster:
                     headers=self._get_headers(),
                     json=json_data
                 ) as response:
+                    # Update rate limit state from response headers
+                    self.rate_limiter.update_from_response(endpoint, dict(response.headers))
+
                     response_data = await response.json()
 
                     # Handle rate limiting (429)
                     if response.status == 429:
-                        retry_after = response_data.get("retry_after", 1)
-                        logger.warning(
-                            f"Rate limited, retrying after {retry_after}s",
-                            extra={"platform": "discord", "retry_after": retry_after}
+                        # Use rate limiter to handle 429 response
+                        wait_time = await self.rate_limiter.handle_rate_limit_response(
+                            endpoint,
+                            response_data,
+                            retry_count,
+                            self.max_retries
                         )
 
-                        if retry_count < self.max_retries:
-                            await asyncio.sleep(retry_after)
+                        if wait_time is not None:
+                            logger.warning(
+                                f"Rate limited, retrying after {wait_time}s",
+                                extra={
+                                    "platform": "discord",
+                                    "retry_after": wait_time,
+                                    "retry_count": retry_count,
+                                    "endpoint": endpoint
+                                }
+                            )
+                            await asyncio.sleep(wait_time)
                             return await self._make_request(
                                 method, endpoint, json_data, retry_count + 1
                             )

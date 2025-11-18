@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: MVP v0.1
-**Status**: MVP v0.1 Complete ✅
+**Version**: v0.2 Iteration 6
+**Status**: v0.2 Infrastructure & Monitoring Complete ✅
 **Last Updated**: November 18, 2025
 
 ---
@@ -80,13 +80,30 @@ This system is designed for a **single moderator** (single-user system).
 - Automatic cleanup of old messages
 - Encrypted storage of Discord token
 
+### v0.2 Infrastructure & Monitoring (Complete ✅)
+
+**AI Integration** (Iteration 5)
+- ✅ OpenAI API client (GPT-4, GPT-3.5-turbo)
+- ✅ Anthropic Claude API client (Claude-3 Opus, Sonnet, Haiku)
+- ✅ AI-powered response suggestions with variants
+- ✅ "Soften/Politeness" function for responses
+- ✅ Confidence score calculation
+- ✅ Response caching
+
+**Advanced Infrastructure** (Iteration 6)
+- ✅ Redis-based job queue system (ARQ)
+- ✅ Background worker service for async processing
+- ✅ Discord API rate limiting (bucket system, global limits)
+- ✅ LLM cost monitoring with budget alerts
+- ✅ Automated reminder system (30-min intervals, max 3 per task)
+- ✅ DND integration for reminders
+
 ### Planned Features
 
-**v0.2** (Coming Soon)
-- AI-powered response suggestions (OpenAI/Anthropic)
-- "Soften/Politeness" function for responses
-- Reminders for pending message cards
+**v0.2** (In Progress)
 - Enhanced allowlist management commands
+- UX improvements
+- Additional tests
 
 **v1.0** (Future)
 - Multi-server support

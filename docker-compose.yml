@@ -20,6 +20,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: moderator_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   backend:
     build:
       context: .
@@ -29,6 +44,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       # Database
       DB_HOST: db
@@ -36,6 +53,11 @@ services:
       DB_NAME: ${DB_NAME:-moderator_db}
       DB_USER: ${DB_USER:-moderator}
       DB_PASSWORD: ${DB_PASSWORD}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
 
       # Telegram
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -58,5 +80,50 @@ services:
     ports:
       - "127.0.0.1:8000:8000"  # API port (optional)
 
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: moderator_worker
+    restart: unless-stopped
+    command: python -m arq src.job_queue.worker.WorkerSettings
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-moderator_db}
+      DB_USER: ${DB_USER:-moderator}
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+
+      # Telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      MODERATOR_TG_USER_ID: ${MODERATOR_TG_USER_ID}
+
+      # Discord (loaded from DB)
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+
+      # LLM (v0.2+)
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4-turbo}
+
+      # Other
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      ALERT_CHAT_ID: ${ALERT_CHAT_ID}
+    volumes:
+      - ./backend/src:/app/src  # For development (remove in production)
+
 volumes:
   postgres_data:
+  redis_data:

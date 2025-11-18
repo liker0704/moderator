@@ -334,7 +334,8 @@ class TelegramBot:
         chat_id: int,
         text: str,
         reply_markup: Optional[dict] = None,
-        disable_web_page_preview: bool = True
+        disable_web_page_preview: bool = True,
+        parse_mode: Optional[str] = None
     ) -> Optional[dict]:
         """
         Send a message to a chat.
@@ -344,6 +345,7 @@ class TelegramBot:
             text: Message text (max 4096 characters)
             reply_markup: Optional inline keyboard
             disable_web_page_preview: Disable link previews
+            parse_mode: Optional parse mode ('Markdown' or 'HTML')
 
         Returns:
             API response with sent message, or None on error
@@ -360,6 +362,9 @@ class TelegramBot:
 
         if reply_markup:
             data['reply_markup'] = reply_markup
+
+        if parse_mode:
+            data['parse_mode'] = parse_mode
 
         try:
             async with self.session.post(
