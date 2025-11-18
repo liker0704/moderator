@@ -44,11 +44,21 @@ async def cmd_start(message: dict, bot: 'TelegramBot'):
     """
     Handle /start command.
 
-    Sends welcome message with bot introduction.
+    Sends welcome message with bot introduction and creates user in database if needed.
     """
     user = message['from']
     user_id = user['id']
     first_name = user.get('first_name', 'User')
+    username = user.get('username')
+
+    # Ensure user exists in database
+    with bot.db.session_scope() as session:
+        from ..database.dao import UserDAO
+
+        existing_user = UserDAO.get_user_by_tg_id(session, user_id)
+        if not existing_user:
+            UserDAO.create_user(session, user_id, username)
+            logger.info(f"Created new user in database: {user_id}")
 
     welcome_text = f"""👋 Welcome to Moderator Console, {first_name}!
 
@@ -147,19 +157,37 @@ async def cmd_test_connection(message: dict, bot: 'TelegramBot'):
     """
     user_id = message['from']['id']
 
-    # TODO: Implement actual Discord connection test
-    # For now, send placeholder response
-    test_text = """🔄 Testing Discord Connection...
+    with bot.db.session_scope() as session:
+        from ..database.dao import UserDAO, DiscordDAO
 
-Status: Not implemented yet
+        user = UserDAO.get_user_by_tg_id(session, user_id)
+        if not user:
+            await bot.send_message(user_id, "❌ User not found. Use /start first.")
+            return
 
-This command will test:
-• Discord Gateway connection
-• Token validity
-• Permission checks
-• Channel access"""
+        discord_conn = DiscordDAO.get_discord_connection(session, user['id'])
+        if not discord_conn:
+            await bot.send_message(user_id,
+                "❌ No Discord connection configured.\n"
+                "Use /setup_discord to configure."
+            )
+            return
 
-    await bot.send_message(user_id, test_text)
+        # Check status
+        status = discord_conn.get('status', 'unknown')
+        if status == 'connected':
+            await bot.send_message(user_id,
+                f"✅ Discord connection active\n"
+                f"Session: {discord_conn.get('session_id', 'N/A')[:16] if discord_conn.get('session_id') else 'N/A'}...\n"
+                f"Last connected: {discord_conn.get('last_connected_at', 'N/A')}"
+            )
+        else:
+            await bot.send_message(user_id,
+                f"❌ Discord not connected\n"
+                f"Status: {status}\n"
+                f"Error: {discord_conn.get('error_message', 'None')}"
+            )
+
     logger.info(f"Connection test requested by user {user_id}")
 
 
@@ -193,21 +221,41 @@ async def cmd_status(message: dict, bot: 'TelegramBot'):
     """
     user_id = message['from']['id']
 
-    # TODO: Get actual status from services
-    status_text = """📈 System Status
+    with bot.db.session_scope() as session:
+        from ..database.dao import UserDAO, DiscordDAO, TaskDAO, AllowlistDAO
 
-🤖 Bot: ✅ Running
-💾 Database: ✅ Connected
-🎮 Discord: ❌ Not Connected
-📨 Telegram: ✅ Connected
+        user = UserDAO.get_user_by_tg_id(session, user_id)
+        if not user:
+            await bot.send_message(user_id, "❌ User not found")
+            return
 
-⏸️ DND Mode: Disabled
-📋 Monitored Channels: 0
-📬 Pending Tasks: 0
+        # Get Discord status
+        discord_conn = DiscordDAO.get_discord_connection(session, user['id'])
+        discord_status = "✅ Connected" if discord_conn and discord_conn['status'] == 'connected' else "❌ Disconnected"
 
-Last Update: Just now"""
+        # Get open tasks
+        open_tasks = TaskDAO.get_open_tasks(session, user['id'])
+        open_count = len(open_tasks)
 
-    await bot.send_message(user_id, status_text)
+        # Get DND status
+        settings = UserDAO.get_user_settings(session, user['id'])
+        dnd_status = "🔕 ON" if settings and settings.get('dnd_enabled') else "🔔 OFF"
+
+        # Get allowlist count
+        channels = AllowlistDAO.get_all_channels(session, platform='discord')
+        channel_count = len(channels)
+
+        status_text = (
+            f"📊 System Status\n\n"
+            f"Discord: {discord_status}\n"
+            f"Open Tasks: {open_count}\n"
+            f"DND Mode: {dnd_status}\n"
+            f"Allowed Channels: {channel_count}\n"
+            f"Database: ✅ Connected"
+        )
+
+        await bot.send_message(user_id, status_text)
+
     logger.info(f"System status requested by user {user_id}")
 
 
@@ -242,14 +290,22 @@ When DND is enabled, you won't receive message notifications. Messages will be q
 
         if mode == 'on':
             # Enable DND
-            # TODO: Call DND service to enable
-            await bot.send_message(user_id, "✅ DND mode enabled. You won't receive notifications.")
+            with bot.db.session_scope() as session:
+                from ..database.dao import UserDAO
+                user = UserDAO.get_user_by_tg_id(session, user_id)
+                if user:
+                    UserDAO.update_dnd_settings(session, user['id'], dnd_enabled=True)
+                    await bot.send_message(user_id, "🔕 DND mode: ON\nYou will not receive message cards.")
             logger.info(f"DND enabled by user {user_id}")
 
         elif mode == 'off':
             # Disable DND
-            # TODO: Call DND service to disable
-            await bot.send_message(user_id, "✅ DND mode disabled. Notifications resumed.")
+            with bot.db.session_scope() as session:
+                from ..database.dao import UserDAO
+                user = UserDAO.get_user_by_tg_id(session, user_id)
+                if user:
+                    UserDAO.update_dnd_settings(session, user['id'], dnd_enabled=False)
+                    await bot.send_message(user_id, "🔔 DND mode: OFF\nYou will receive message cards.")
             logger.info(f"DND disabled by user {user_id}")
 
         else:
@@ -295,15 +351,26 @@ To get IDs:
         await bot.send_message(user_id, "❌ Server ID and Channel ID must be numeric")
         return
 
-    # TODO: Add channel to allowlist in database
-    success_text = f"""✅ Channel Added to Allowlist
+    # Add channel to allowlist in database
+    with bot.db.session_scope() as session:
+        from ..database.dao import AllowlistDAO
+
+        AllowlistDAO.add_channel(
+            session,
+            platform='discord',
+            channel_id=channel_id,
+            server_id=server_id
+        )
+
+        success_text = f"""✅ Channel Added to Allowlist
 
 Server ID: {server_id}
 Channel ID: {channel_id}
 
 Messages from this channel will now be monitored."""
 
-    await bot.send_message(user_id, success_text)
+        await bot.send_message(user_id, success_text)
+
     logger.info(f"Channel {channel_id} in server {server_id} added to allowlist by user {user_id}")
 
 
@@ -337,14 +404,20 @@ Example:
         await bot.send_message(user_id, "❌ Channel ID must be numeric")
         return
 
-    # TODO: Remove channel from allowlist in database
-    success_text = f"""✅ Channel Removed from Allowlist
+    # Remove channel from allowlist in database
+    with bot.db.session_scope() as session:
+        from ..database.dao import AllowlistDAO
+
+        AllowlistDAO.remove_channel(session, channel_id, platform='discord')
+
+        success_text = f"""✅ Channel Removed from Allowlist
 
 Channel ID: {channel_id}
 
 Messages from this channel will no longer be monitored."""
 
-    await bot.send_message(user_id, success_text)
+        await bot.send_message(user_id, success_text)
+
     logger.info(f"Channel {channel_id} removed from allowlist by user {user_id}")
 
 
@@ -480,11 +553,185 @@ async def callback_confirm(query: dict, bot: 'TelegramBot'):
         reply_id = int(data.split('_')[1])
     except (IndexError, ValueError):
         logger.error(f"Invalid callback data format: {data}")
+        await bot.send_message(chat_id, "❌ Error: Invalid callback data")
         return
 
-    # TODO: Get reply from database and post to Discord/Telegram
-    await bot.send_message(chat_id, "✅ Reply sent! (Not fully implemented yet)")
-    logger.info(f"User {user_id} confirmed reply {reply_id}")
+    # Get reply from database and post to appropriate platform
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.reply_dao import ReplyDAO
+    import json
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get reply
+            reply = await ReplyDAO.get_reply_by_id(conn, reply_id)
+            if not reply:
+                await bot.send_message(chat_id, "❌ Error: Reply not found")
+                return
+
+            # Get task
+            task_query = "SELECT * FROM tasks WHERE id = (SELECT task_id FROM replies WHERE id = $1)"
+            task_row = await conn.fetchrow(task_query, reply_id)
+            if not task_row:
+                await bot.send_message(chat_id, "❌ Error: Task not found")
+                return
+            task = dict(task_row)
+
+            # Get message
+            message_query = "SELECT * FROM messages WHERE id = $1"
+            message_row = await conn.fetchrow(message_query, task['source_message_id'])
+            if not message_row:
+                await bot.send_message(chat_id, "❌ Error: Message not found")
+                return
+            msg_data = dict(message_row)
+
+            # Determine platform and post
+            platform = msg_data['platform']
+            reply_text = reply['content']
+
+            await bot.send_message(chat_id, "🔄 Sending reply...")
+
+            if platform == 'discord':
+                # Get user's Discord token from database
+                from ..database.dao import DiscordDAO
+
+                with bot.db.session_scope() as session:
+                    from ..database.dao import UserDAO
+                    user_db = UserDAO.get_user_by_tg_id(session, user_id)
+                    if not user_db:
+                        await bot.send_message(chat_id, "❌ Error: User not found in database")
+                        return
+
+                    discord_conn = DiscordDAO.get_discord_connection(session, user_db['id'])
+                    if not discord_conn:
+                        await bot.send_message(
+                            chat_id,
+                            "❌ Discord not configured. Use /setup_discord to configure."
+                        )
+                        return
+
+                    # Decrypt token
+                    from ..database.encryption import get_encryption_service
+                    encryption_service = get_encryption_service()
+                    try:
+                        discord_token = encryption_service.decrypt(discord_conn['user_token_encrypted'])
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt Discord token: {e}", exc_info=True)
+                        await bot.send_message(chat_id, "❌ Error decrypting Discord token")
+                        return
+
+                # Use Discord poster
+                from ..discord.poster import DiscordPoster
+                poster = DiscordPoster(token=discord_token)
+
+                result = await poster.post_message(
+                    channel_id=msg_data['channel_id'],
+                    content=reply_text,
+                    thread_id=msg_data.get('thread_id'),
+                    reply_to=msg_data['ext_message_id']
+                )
+
+                if result.get('success'):
+                    # Mark reply as confirmed and posted
+                    await ReplyDAO.mark_reply_confirmed(conn, reply_id)
+                    platform_ref = json.dumps({
+                        'platform': 'discord',
+                        'message_id': result.get('message_id'),
+                        'channel_id': msg_data['channel_id']
+                    })
+                    await ReplyDAO.mark_reply_posted(conn, reply_id, platform_ref)
+
+                    # Update task status
+                    update_task_query = """
+                        UPDATE tasks
+                        SET status = 'answered', answered_at = NOW(), updated_at = NOW()
+                        WHERE id = $1
+                    """
+                    await conn.execute(update_task_query, task['id'])
+
+                    await bot.send_message(chat_id, "✅ Reply sent to Discord!")
+                    logger.info(f"Reply {reply_id} sent to Discord successfully")
+                else:
+                    # Update with error - mark as not posted
+                    error_message = result.get('error', 'Unknown error')
+                    await bot.send_message(
+                        chat_id,
+                        f"❌ Failed to send reply: {error_message}\n"
+                        f"Use /retry to try again."
+                    )
+                    logger.error(f"Failed to send reply {reply_id}: {error_message}")
+
+            elif platform == 'telegram':
+                # Use Telegram poster
+                from ..telegram.poster import TelegramPoster
+                from ..config import get_config
+
+                config = get_config()
+                poster = TelegramPoster(token=config.telegram.bot_token)
+
+                # Convert channel_id to int for Telegram
+                try:
+                    tg_chat_id = int(msg_data['channel_id'])
+                except ValueError:
+                    await bot.send_message(chat_id, "❌ Error: Invalid Telegram chat ID")
+                    return
+
+                # Convert ext_message_id to int if available
+                reply_to_msg_id = None
+                if msg_data.get('ext_message_id'):
+                    try:
+                        reply_to_msg_id = int(msg_data['ext_message_id'])
+                    except ValueError:
+                        pass
+
+                result = await poster.post_message(
+                    chat_id=tg_chat_id,
+                    text=reply_text,
+                    reply_to_message_id=reply_to_msg_id
+                )
+
+                if result.get('success'):
+                    # Mark reply as confirmed and posted
+                    await ReplyDAO.mark_reply_confirmed(conn, reply_id)
+                    platform_ref = json.dumps({
+                        'platform': 'telegram',
+                        'message_id': result.get('message_id'),
+                        'chat_id': tg_chat_id
+                    })
+                    await ReplyDAO.mark_reply_posted(conn, reply_id, platform_ref)
+
+                    # Update task status
+                    update_task_query = """
+                        UPDATE tasks
+                        SET status = 'answered', answered_at = NOW(), updated_at = NOW()
+                        WHERE id = $1
+                    """
+                    await conn.execute(update_task_query, task['id'])
+
+                    await bot.send_message(chat_id, "✅ Reply sent to Telegram!")
+                    logger.info(f"Reply {reply_id} sent to Telegram successfully")
+                else:
+                    error_message = result.get('error', 'Unknown error')
+                    await bot.send_message(
+                        chat_id,
+                        f"❌ Failed to send reply: {error_message}\n"
+                        f"Use /retry to try again."
+                    )
+                    logger.error(f"Failed to send reply {reply_id}: {error_message}")
+
+            else:
+                await bot.send_message(chat_id, f"❌ Unsupported platform: {platform}")
+                logger.error(f"Unsupported platform {platform} for reply {reply_id}")
+
+        # Clear user state after posting attempt
+        bot.clear_user_state(user_id)
+
+    except Exception as e:
+        logger.error(f"Error confirming reply {reply_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+        bot.clear_user_state(user_id)
 
 
 async def callback_retry(query: dict, bot: 'TelegramBot'):
@@ -503,11 +750,182 @@ async def callback_retry(query: dict, bot: 'TelegramBot'):
         task_id = int(data.split('_')[1])
     except (IndexError, ValueError):
         logger.error(f"Invalid callback data format: {data}")
+        await bot.send_message(chat_id, "❌ Error: Invalid callback data")
         return
 
-    # TODO: Retry posting the reply
-    await bot.send_message(chat_id, "🔄 Retrying... (Not implemented yet)")
-    logger.info(f"User {user_id} requested retry for task {task_id}")
+    # Get latest reply for this task and retry posting
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.reply_dao import ReplyDAO
+    import json
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get task
+            task_query = "SELECT * FROM tasks WHERE id = $1"
+            task_row = await conn.fetchrow(task_query, task_id)
+            if not task_row:
+                await bot.send_message(chat_id, "❌ Error: Task not found")
+                return
+            task = dict(task_row)
+
+            # Get latest reply for this task
+            reply = await ReplyDAO.get_latest_reply_for_task(conn, task_id)
+            if not reply:
+                await bot.send_message(chat_id, "❌ Error: No reply found for this task")
+                return
+
+            reply_id = reply['id']
+
+            # Get message
+            message_query = "SELECT * FROM messages WHERE id = $1"
+            message_row = await conn.fetchrow(message_query, task['source_message_id'])
+            if not message_row:
+                await bot.send_message(chat_id, "❌ Error: Message not found")
+                return
+            msg_data = dict(message_row)
+
+            # Retry posting (same logic as callback_confirm)
+            platform = msg_data['platform']
+            reply_text = reply['content']
+
+            await bot.send_message(chat_id, "🔄 Retrying...")
+
+            if platform == 'discord':
+                # Get user's Discord token from database
+                from ..database.dao import DiscordDAO
+
+                with bot.db.session_scope() as session:
+                    from ..database.dao import UserDAO
+                    user_db = UserDAO.get_user_by_tg_id(session, user_id)
+                    if not user_db:
+                        await bot.send_message(chat_id, "❌ Error: User not found in database")
+                        return
+
+                    discord_conn = DiscordDAO.get_discord_connection(session, user_db['id'])
+                    if not discord_conn:
+                        await bot.send_message(
+                            chat_id,
+                            "❌ Discord not configured. Use /setup_discord to configure."
+                        )
+                        return
+
+                    # Decrypt token
+                    from ..database.encryption import get_encryption_service
+                    encryption_service = get_encryption_service()
+                    try:
+                        discord_token = encryption_service.decrypt(discord_conn['user_token_encrypted'])
+                    except Exception as e:
+                        logger.error(f"Failed to decrypt Discord token: {e}", exc_info=True)
+                        await bot.send_message(chat_id, "❌ Error decrypting Discord token")
+                        return
+
+                # Use Discord poster
+                from ..discord.poster import DiscordPoster
+                poster = DiscordPoster(token=discord_token)
+
+                result = await poster.post_message(
+                    channel_id=msg_data['channel_id'],
+                    content=reply_text,
+                    thread_id=msg_data.get('thread_id'),
+                    reply_to=msg_data['ext_message_id']
+                )
+
+                if result.get('success'):
+                    # Mark reply as confirmed and posted
+                    await ReplyDAO.mark_reply_confirmed(conn, reply_id)
+                    platform_ref = json.dumps({
+                        'platform': 'discord',
+                        'message_id': result.get('message_id'),
+                        'channel_id': msg_data['channel_id']
+                    })
+                    await ReplyDAO.mark_reply_posted(conn, reply_id, platform_ref)
+
+                    # Update task status
+                    update_task_query = """
+                        UPDATE tasks
+                        SET status = 'answered', answered_at = NOW(), updated_at = NOW()
+                        WHERE id = $1
+                    """
+                    await conn.execute(update_task_query, task['id'])
+
+                    await bot.send_message(chat_id, "✅ Reply sent to Discord!")
+                    logger.info(f"Reply {reply_id} retried and sent to Discord successfully")
+                else:
+                    error_message = result.get('error', 'Unknown error')
+                    await bot.send_message(
+                        chat_id,
+                        f"❌ Retry failed: {error_message}\n"
+                        f"Please check your Discord connection or try again later."
+                    )
+                    logger.error(f"Failed to retry reply {reply_id}: {error_message}")
+
+            elif platform == 'telegram':
+                # Use Telegram poster
+                from ..telegram.poster import TelegramPoster
+                from ..config import get_config
+
+                config = get_config()
+                poster = TelegramPoster(token=config.telegram.bot_token)
+
+                # Convert channel_id to int for Telegram
+                try:
+                    tg_chat_id = int(msg_data['channel_id'])
+                except ValueError:
+                    await bot.send_message(chat_id, "❌ Error: Invalid Telegram chat ID")
+                    return
+
+                # Convert ext_message_id to int if available
+                reply_to_msg_id = None
+                if msg_data.get('ext_message_id'):
+                    try:
+                        reply_to_msg_id = int(msg_data['ext_message_id'])
+                    except ValueError:
+                        pass
+
+                result = await poster.post_message(
+                    chat_id=tg_chat_id,
+                    text=reply_text,
+                    reply_to_message_id=reply_to_msg_id
+                )
+
+                if result.get('success'):
+                    # Mark reply as confirmed and posted
+                    await ReplyDAO.mark_reply_confirmed(conn, reply_id)
+                    platform_ref = json.dumps({
+                        'platform': 'telegram',
+                        'message_id': result.get('message_id'),
+                        'chat_id': tg_chat_id
+                    })
+                    await ReplyDAO.mark_reply_posted(conn, reply_id, platform_ref)
+
+                    # Update task status
+                    update_task_query = """
+                        UPDATE tasks
+                        SET status = 'answered', answered_at = NOW(), updated_at = NOW()
+                        WHERE id = $1
+                    """
+                    await conn.execute(update_task_query, task['id'])
+
+                    await bot.send_message(chat_id, "✅ Reply sent to Telegram!")
+                    logger.info(f"Reply {reply_id} retried and sent to Telegram successfully")
+                else:
+                    error_message = result.get('error', 'Unknown error')
+                    await bot.send_message(
+                        chat_id,
+                        f"❌ Retry failed: {error_message}\n"
+                        f"Please try again later."
+                    )
+                    logger.error(f"Failed to retry reply {reply_id}: {error_message}")
+
+            else:
+                await bot.send_message(chat_id, f"❌ Unsupported platform: {platform}")
+                logger.error(f"Unsupported platform {platform} for reply {reply_id}")
+
+    except Exception as e:
+        logger.error(f"Error retrying task {task_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
 
 
 async def callback_toggle_dnd(query: dict, bot: 'TelegramBot'):
@@ -567,25 +985,45 @@ async def handle_discord_token_input(message: dict, bot: 'TelegramBot'):
     user_id = message['from']['id']
     token = message.get('text', '').strip()
 
-    if not token:
-        await bot.send_message(user_id, "❌ Token cannot be empty. Please send a valid token or /cancel")
+    # Validate token format (basic check)
+    if not token or len(token) < 50:
+        await bot.send_message(user_id, "❌ Invalid token format. Please try again or /cancel")
         return
 
-    # TODO: Validate and store token (encrypted) in database
-    # TODO: Test connection to Discord
+    with bot.db.session_scope() as session:
+        from ..database.dao import UserDAO, DiscordDAO
+        from ..database.encryption import get_encryption_service
 
-    # For now, just acknowledge
-    success_text = """✅ Discord Token Saved
+        # Get or create user
+        user = UserDAO.get_user_by_tg_id(session, user_id)
+        if not user:
+            user_id_db = UserDAO.create_user(session, user_id)
+        else:
+            user_id_db = user['id']
 
-Token has been encrypted and stored securely.
+        # Encrypt and save token
+        encryption_service = get_encryption_service()
+        encrypted_token = encryption_service.encrypt(token)
 
-Next steps:
-1. Use /test_connection to verify connection
-2. Use /allow_channel to add channels to monitor
+        DiscordDAO.save_discord_connection(
+            session,
+            user_id=user_id_db,
+            encrypted_token=encrypted_token,
+            super_properties=None  # Auto-generated by gateway
+        )
 
-Note: This is a placeholder. Actual implementation needs database integration."""
+        await bot.send_message(user_id,
+            "✅ Discord token saved and encrypted\n"
+            "🔄 Connecting to Discord Gateway...\n"
+            "Please wait..."
+        )
 
-    await bot.send_message(user_id, success_text)
+        # Mark as saved (gateway connection will be handled separately)
+        DiscordDAO.update_connection_status(session, user_id_db, 'disconnected')
+
+        await bot.send_message(user_id,
+            "✅ Token saved! Use /test_connection to verify."
+        )
 
     # Clear state
     bot.clear_user_state(user_id)
@@ -614,7 +1052,31 @@ async def handle_reply_text_input(message: dict, bot: 'TelegramBot', state: str)
         await bot.send_message(user_id, "❌ Error: Invalid state. Please try again.")
         return
 
-    # TODO: Store reply in database with pending status
+    # Store reply in database with pending status
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.reply_dao import ReplyDAO
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Create reply with 'human' generation and not confirmed yet
+            reply_id = await ReplyDAO.create_reply(
+                conn,
+                task_id=task_id,
+                content=reply_text,
+                generated_by='human',
+                llm_confidence=None,
+                edit_of=None
+            )
+
+            logger.info(f"Created reply {reply_id} for task {task_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to create reply in database: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error saving reply: {str(e)}")
+        bot.clear_user_state(user_id)
+        return
 
     # Show confirmation message with reply preview
     preview_text = f"""✅ Reply Preview
@@ -626,32 +1088,61 @@ Your reply:
 
 Please confirm to send this message."""
 
-    # Create confirmation keyboard
+    # Create confirmation keyboard with reply_id
     keyboard = {
         'inline_keyboard': [
             [
-                {'text': '✅ Confirm & Send', 'callback_data': f'confirm_{task_id}'},
-                {'text': '❌ Cancel', 'callback_data': 'cancel_reply'}
+                {'text': '✅ Confirm & Send', 'callback_data': f'confirm_{reply_id}'},
+                {'text': '❌ Cancel', 'callback_data': f'cancel_reply_{reply_id}'}
             ]
         ]
     }
 
     await bot.send_message(chat_id, preview_text, reply_markup=keyboard)
 
-    # Update state to awaiting confirmation
-    bot.set_user_state(user_id, f'awaiting_confirm_{task_id}', {'reply_text': reply_text})
+    # Update state to awaiting confirmation with reply_id
+    bot.set_user_state(user_id, f'awaiting_confirm_{task_id}', {
+        'reply_text': reply_text,
+        'reply_id': reply_id
+    })
 
     logger.info(f"User {user_id} submitted reply for task {task_id}, awaiting confirmation")
 
 
 async def callback_cancel_reply(query: dict, bot: 'TelegramBot'):
     """
-    Handle cancel_reply callback.
+    Handle cancel_reply_{reply_id} callback.
 
-    Cancel the reply confirmation.
+    Cancel the reply confirmation and delete the reply from database.
     """
     user_id = query['from']['id']
     chat_id = query['message']['chat']['id']
+    data = query['data']
+
+    # Extract reply_id if present
+    reply_id = None
+    if '_' in data and len(data.split('_')) >= 3:
+        try:
+            reply_id = int(data.split('_')[2])
+        except (IndexError, ValueError):
+            logger.warning(f"Could not extract reply_id from callback data: {data}")
+
+    # Delete reply from database if we have reply_id
+    if reply_id:
+        from ..database.connection import get_asyncpg_pool
+        from ..database.dao.reply_dao import ReplyDAO
+
+        db_pool = get_asyncpg_pool()
+
+        try:
+            async with db_pool.acquire() as conn:
+                deleted = await ReplyDAO.delete_reply(conn, reply_id)
+                if deleted:
+                    logger.info(f"Deleted reply {reply_id} (cancelled by user {user_id})")
+                else:
+                    logger.warning(f"Reply {reply_id} not found when trying to delete")
+        except Exception as e:
+            logger.error(f"Error deleting reply {reply_id}: {e}", exc_info=True)
 
     # Clear state
     bot.clear_user_state(user_id)

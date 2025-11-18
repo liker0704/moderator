@@ -45,63 +45,104 @@ DEFAULT_CONTEXT_SIZE = 10
 # Card Formatting Functions
 # =============================================================================
 
-def format_card(
-    task: Dict[str, Any],
-    context: List[Dict[str, Any]],
-    platform: str = "Discord",
-    server_name: str = "Unknown Server",
-    channel_name: str = "unknown-channel",
-    show_more_available: bool = False
-) -> str:
+def format_card(message: dict, context_messages: list) -> str:
     """
-    Format a task card for Telegram display.
+    Format a message card for Telegram display.
 
     Args:
-        task: Task dictionary containing message data
-        context: List of context messages (previous messages in conversation)
-        platform: Platform name (Discord or Telegram)
-        server_name: Server/guild name
-        channel_name: Channel name
-        show_more_available: Whether more context is available to load
+        message: Message dict from MessageDAO with keys:
+            - platform: 'discord' or 'telegram'
+            - server_id: Discord guild ID (optional)
+            - channel_id: Channel/chat ID
+            - thread_id: Thread ID (optional)
+            - author_name: Author username
+            - content: Message text
+            - platform_created_at: Timestamp
+            - has_image: Boolean
+        context_messages: List of previous messages (same format)
 
     Returns:
-        Formatted card text
+        Formatted card text string
     """
-    # Extract task information
-    author = task.get('author', 'Unknown')
-    timestamp = task.get('timestamp', datetime.utcnow())
-    content = task.get('content', '')
-    task_id = task.get('id', 0)
+    # Platform emoji
+    platform_emoji = "💬" if message.get('platform') == 'telegram' else "📝"
 
-    # Format timestamp
+    # Build header
+    header_parts = [platform_emoji, message.get('platform', 'unknown').title()]
+
+    # Add server name for Discord (if available)
+    if message.get('server_id'):
+        # TODO: Get server name from Discord or cache
+        server_id = str(message['server_id'])
+        header_parts.append(f"Server:{server_id[:8]}...")
+
+    # Add channel
+    channel_id = message.get('channel_id')
+    if channel_id:
+        header_parts.append(f"#{str(channel_id)[:8]}...")
+    else:
+        header_parts.append("#unknown")
+
+    # Add thread if present
+    thread_id = message.get('thread_id')
+    if thread_id:
+        header_parts.append(f"Thread:{str(thread_id)[:8]}...")
+
+    # Add author and time
+    timestamp = message.get('platform_created_at')
     if isinstance(timestamp, str):
-        try:
-            timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
-        except ValueError:
-            timestamp = datetime.utcnow()
+        time_str = timestamp.split('T')[1][:8] if 'T' in timestamp else "unknown"  # HH:MM:SS
+    elif timestamp:
+        time_str = timestamp.strftime("%H:%M:%S")
+    else:
+        time_str = "unknown"
 
-    time_str = timestamp.strftime('%H:%M')
+    author_name = message.get('author_name') or 'Unknown'
+    header_parts.append(f"@{author_name}")
+    header_parts.append(time_str)
 
-    # Build card header
-    header = f"{platform} • {server_name} • #{channel_name} • @{author} • {time_str}"
+    header = " • ".join(header_parts)
 
     # Build context section
-    context_text = _format_context(context)
+    context_lines = []
+    if context_messages:
+        context_lines.append("\n📚 Context (recent messages):")
+        for ctx_msg in context_messages[-10:]:  # Last 10
+            ctx_time = ctx_msg.get('platform_created_at')
+            if isinstance(ctx_time, str):
+                ctx_time_str = ctx_time.split('T')[1][:5] if 'T' in ctx_time else "??"  # HH:MM
+            elif ctx_time:
+                ctx_time_str = ctx_time.strftime("%H:%M")
+            else:
+                ctx_time_str = "??"
 
-    # Build main message section
-    message_section = f"\n📩 New Message:\n{content}"
+            ctx_content = ctx_msg.get('content', '')
+            if len(ctx_content) > 100:
+                ctx_content = ctx_content[:100] + "..."  # Truncate long messages
 
-    # Truncate if necessary
-    card_text = f"{header}\n\n{context_text}{message_section}"
+            ctx_author = ctx_msg.get('author_name', 'Unknown')
+            context_lines.append(f"[{ctx_time_str}] {ctx_author}: {ctx_content}")
 
-    if len(card_text) > MAX_MESSAGE_LENGTH - 100:  # Leave room for footer
-        card_text = card_text[:MAX_MESSAGE_LENGTH - 200] + "\n\n[Message truncated...]"
+    context_text = "\n".join(context_lines) if context_lines else ""
 
-    # Add footer with additional info
-    if show_more_available:
-        card_text += "\n\n💡 More context available - click 'Показать больше'"
+    # Build message section
+    message_content = message.get('content') or '[No content]'
+    if message.get('has_image'):
+        message_content += "\n📎 [Has attachments]"
 
-    return card_text
+    message_section = f"\n\n💬 Current Message:\n{message_content}"
+
+    # Build card
+    card = f"{header}{context_text}{message_section}"
+
+    # Truncate if too long
+    if len(card) > MAX_MESSAGE_LENGTH - 100:
+        card = card[:MAX_MESSAGE_LENGTH - 200] + "\n\n[Message truncated...]"
+
+    # Add footer
+    card += "\n\n💡 Click 'Показать больше' for full history"
+
+    return card
 
 
 def _format_context(context: List[Dict[str, Any]]) -> str:
@@ -250,47 +291,27 @@ def _truncate_text(text: str, max_length: int) -> str:
 # Keyboard Creation Functions
 # =============================================================================
 
-def create_card_keyboard(
-    task_id: int,
-    show_more: bool = True,
-    show_dnd: bool = True,
-    show_retry: bool = False
-) -> dict:
+def create_card_keyboard(task_id: int) -> dict:
     """
-    Create inline keyboard for a message card.
+    Create inline keyboard for message card.
 
     Args:
         task_id: Task ID for callback data
-        show_more: Whether to show "Show More" button
-        show_dnd: Whether to show DND toggle button
-        show_retry: Whether to show retry button
 
     Returns:
-        Inline keyboard markup dictionary
+        Telegram inline keyboard dict
     """
-    # First row: Reply and Show More
-    first_row = [
-        {'text': '✍️ Ответить', 'callback_data': f'reply_{task_id}'}
-    ]
-
-    if show_more:
-        first_row.append({'text': '📋 Показать больше', 'callback_data': f'more_{task_id}'})
-
-    keyboard = [first_row]
-
-    # Second row: DND and/or Retry
-    second_row = []
-
-    if show_dnd:
-        second_row.append({'text': '⏸️ DND', 'callback_data': 'toggle_dnd'})
-
-    if show_retry:
-        second_row.append({'text': '🔄 Повторить', 'callback_data': f'retry_{task_id}'})
-
-    if second_row:
-        keyboard.append(second_row)
-
-    return {'inline_keyboard': keyboard}
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✍️ Ответить", "callback_data": f"reply_{task_id}"},
+                {"text": "📖 Показать больше", "callback_data": f"more_{task_id}"}
+            ],
+            [
+                {"text": "🔕 DND", "callback_data": "toggle_dnd"}
+            ]
+        ]
+    }
 
 
 def create_confirmation_keyboard(task_id: int) -> dict:
@@ -406,6 +427,37 @@ def create_pagination_keyboard(
 # =============================================================================
 # Card Update Functions
 # =============================================================================
+
+async def update_card_with_status(
+    bot,
+    chat_id: int,
+    message_id: int,
+    status_text: str,
+    keep_keyboard: bool = False
+):
+    """
+    Update card with status message (success/error).
+
+    Args:
+        bot: TelegramBot instance
+        chat_id: Chat ID
+        message_id: Message ID to update
+        status_text: Status to append
+        keep_keyboard: Whether to keep the keyboard
+
+    Note:
+        This is a helper function that will be fully implemented
+        when integrated with the TelegramBot class. For now, it
+        provides the signature and documentation for the feature.
+    """
+    # TODO: Implementation will be completed during integration
+    # Steps:
+    # 1. Get current message text via bot.get_message() or cache
+    # 2. Append status_text to the message
+    # 3. Update message via bot.edit_message()
+    # 4. Optionally keep or remove keyboard based on keep_keyboard flag
+    pass
+
 
 def update_card_with_more_context(
     original_card: str,
@@ -586,38 +638,46 @@ def create_simple_card(
 
 def create_example_card() -> tuple[str, dict]:
     """
-    Create an example card for testing.
+    Create an example card for testing with database model format.
 
     Returns:
         Tuple of (card_text, keyboard)
     """
-    task = {
-        'id': 123,
-        'author': 'john_doe',
+    # Example message from MessageDAO
+    message = {
+        'platform': 'discord',
+        'server_id': '123456789012345678',
+        'channel_id': '987654321098765432',
+        'thread_id': None,
+        'author_name': 'john_doe',
         'content': 'This is a test message that needs moderation review.',
-        'timestamp': datetime.utcnow()
+        'platform_created_at': '2025-11-18T14:30:45.123456',
+        'has_image': False
     }
 
-    context = [
+    # Example context messages
+    context_messages = [
         {
-            'author': 'alice',
+            'platform': 'discord',
+            'channel_id': '987654321098765432',
+            'author_name': 'alice',
             'content': 'Hey everyone!',
-            'timestamp': datetime.utcnow()
+            'platform_created_at': '2025-11-18T14:28:12.123456',
+            'has_image': False
         },
         {
-            'author': 'bob',
-            'content': 'Hello Alice!',
-            'timestamp': datetime.utcnow()
+            'platform': 'discord',
+            'channel_id': '987654321098765432',
+            'author_name': 'bob',
+            'content': 'Hello Alice! How are you doing today?',
+            'platform_created_at': '2025-11-18T14:29:30.123456',
+            'has_image': False
         }
     ]
 
     card_text = format_card(
-        task=task,
-        context=context,
-        platform="Discord",
-        server_name="Test Server",
-        channel_name="general",
-        show_more_available=True
+        message=message,
+        context_messages=context_messages
     )
 
     keyboard = create_card_keyboard(task_id=123)

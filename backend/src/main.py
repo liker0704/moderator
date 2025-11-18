@@ -19,19 +19,23 @@ The application runs multiple concurrent tasks to handle:
 import asyncio
 import signal
 import sys
+import json
 from typing import Optional
 from datetime import datetime
 
 from config import get_config
 from utils.logger import setup_logger, get_logger
-from database.connection import init_db, close_db, session_scope
+from database.connection import init_db, close_db, session_scope, init_asyncpg_pool, get_asyncpg_pool, close_asyncpg_pool
 from database.encryption import init_encryption, get_encryption_service
 from database.models import User, Settings, Task, Message, ChannelsAllowlist
+from database.dao import MessageDAO, AttachmentDAO, AsyncTaskDAO, AsyncUserDAO
 from discord.gateway import DiscordGatewayManager
 from telegram.bot import create_bot
 from telegram.handlers import register_all_handlers
 from telegram.cards import format_card, create_card_keyboard
 from services.allowlist import is_channel_allowed
+from services.context import get_context_by_channel
+from services.dnd import is_dnd_active
 from services.alerts import send_info_alert, send_error_alert, send_critical_alert
 
 # Initialize logger
@@ -53,6 +57,7 @@ class ModeratorApplication:
         """Initialize the application."""
         self.config = get_config()
         self.db = None
+        self.db_pool = None
         self.encryption_service = None
         self.telegram_bot = None
         self.discord_gateway = None
@@ -94,7 +99,7 @@ class ModeratorApplication:
             )
             logger.info(f"Logging initialized at level: {self.config.log_level}")
 
-            # 2. Initialize database connection pool
+            # 2. Initialize database connection pool (SQLAlchemy)
             logger.info("Initializing database connection...")
             self.db = init_db(
                 database_url=self.config.database.connection_string,
@@ -103,6 +108,15 @@ class ModeratorApplication:
                 echo=self.config.is_development
             )
             logger.info("Database connection established")
+
+            # 2b. Initialize asyncpg connection pool for async operations
+            logger.info("Initializing asyncpg connection pool...")
+            self.db_pool = await init_asyncpg_pool(
+                database_url=self.config.database.connection_string,
+                min_size=5,
+                max_size=15
+            )
+            logger.info("Asyncpg connection pool established")
 
             # 3. Check database health and run migrations if needed
             if not self.db.health_check():
@@ -125,6 +139,9 @@ class ModeratorApplication:
             # 5. Initialize Telegram Bot
             logger.info("Initializing Telegram bot...")
             self.telegram_bot = create_bot()
+
+            # Attach database connection to bot
+            self.telegram_bot.db = self.db
 
             # Register all handlers (commands, callbacks, FSM)
             register_all_handlers(self.telegram_bot)
@@ -270,6 +287,11 @@ class ModeratorApplication:
                 logger.info("Telegram bot stopped")
 
             # Close database connections
+            if self.db_pool:
+                logger.info("Closing asyncpg connection pool...")
+                await close_asyncpg_pool()
+                logger.info("Asyncpg pool closed")
+
             if self.db:
                 logger.info("Closing database connections...")
                 close_db()
@@ -314,66 +336,102 @@ class ModeratorApplication:
         self._shutdown_event.set()
 
     async def handle_discord_message(self, event_type: str, message_data: dict):
-        """
-        Handle Discord MESSAGE_CREATE events.
-
-        Event Flow:
-        1. Extract message details
-        2. Check if channel is in allowlist
-        3. Store message in database
-        4. Create task for moderator
-        5. Send card to Telegram
-
-        Args:
-            event_type: Discord event type (MESSAGE_CREATE, etc.)
-            message_data: Message payload from Discord
-        """
+        """Handle incoming Discord MESSAGE_CREATE event and save to database."""
         if event_type != "MESSAGE_CREATE":
             return
 
         try:
-            # Extract message details
-            message_id = message_data.get("id")
-            channel_id = message_data.get("channel_id")
-            guild_id = message_data.get("guild_id")
-            author = message_data.get("author", {})
-            author_id = author.get("id")
-            author_username = author.get("username", "Unknown")
-            content = message_data.get("content", "")
-            timestamp_str = message_data.get("timestamp")
-            attachments = message_data.get("attachments", [])
+            # Extract data
+            channel_id = message_data.get('channel_id')
+            guild_id = message_data.get('guild_id')
+            thread_id = message_data.get('thread_id')  # For threads
+            author = message_data.get('author', {})
+            content = message_data.get('content', '')
+            attachments = message_data.get('attachments', [])
+            timestamp = message_data.get('timestamp')
+            ext_message_id = message_data.get('id')
 
             logger.info(
-                f"Discord message received: {message_id} from {author_username} in channel {channel_id}",
+                f"Discord message received: {ext_message_id} from {author.get('username')} in channel {channel_id}",
                 extra={
                     "platform": "discord",
                     "channel_id": channel_id,
-                    "author_id": author_id
+                    "author_id": author.get('id')
                 }
             )
 
-            # TODO: Check if channel is in allowlist
-            # For now, we'll skip this check in development
-            # In production, uncomment:
-            # async with self.db.session_scope() as session:
-            #     allowed = await is_channel_allowed(
-            #         session,
-            #         platform="discord",
-            #         channel_id=channel_id,
-            #         server_id=guild_id
-            #     )
-            #
-            #     if not allowed:
-            #         logger.debug(f"Channel {channel_id} not in allowlist, ignoring message")
-            #         return
+            # 1. Check allowlist
+            async with self.db_pool.acquire() as conn:
+                from services.allowlist import is_channel_allowed
+                allowed = await is_channel_allowed(
+                    conn,
+                    platform='discord',
+                    channel_id=channel_id,
+                    server_id=guild_id,
+                    thread_id=thread_id
+                )
 
-            # TODO: Store message in database
-            # TODO: Create task for moderator
-            # TODO: Send card to Telegram
+                if not allowed:
+                    logger.debug(f"Message from non-allowlisted channel {channel_id}")
+                    return
 
-            # Placeholder implementation
-            logger.info(f"Message {message_id} would be processed here")
-            logger.debug(f"Content: {content[:100]}{'...' if len(content) > 100 else ''}")
+                # 2. Save message to database
+                from database.dao import MessageDAO, AttachmentDAO
+                message_id = await MessageDAO.create_message(
+                    conn,
+                    platform='discord',
+                    ext_message_id=ext_message_id,
+                    server_id=guild_id,
+                    channel_id=channel_id,
+                    thread_id=thread_id,
+                    author_id=author.get('id'),
+                    author_name=author.get('username'),
+                    content=content,
+                    has_image=len(attachments) > 0,
+                    platform_created_at=timestamp
+                )
+
+                # 3. Save attachments
+                for attachment in attachments:
+                    await AttachmentDAO.create_attachment(
+                        conn,
+                        message_id=message_id,
+                        kind='image' if attachment.get('content_type', '').startswith('image') else 'file',
+                        ref=attachment.get('url'),
+                        meta=json.dumps({
+                            'filename': attachment.get('filename'),
+                            'size': attachment.get('size'),
+                            'width': attachment.get('width'),
+                            'height': attachment.get('height')
+                        })
+                    )
+
+                # 4. Create task for moderator
+                from database.dao import AsyncTaskDAO, AsyncUserDAO
+                # Get moderator user_id (from config or settings)
+                moderator_tg_id = self.config.telegram.moderator_user_id
+                user = await AsyncUserDAO.get_user_by_tg_id(conn, moderator_tg_id)
+                if not user:
+                    # Create user if doesn't exist
+                    user_id = await AsyncUserDAO.create_user(conn, moderator_tg_id)
+                else:
+                    user_id = user['id']
+
+                # Check DND mode
+                from services.dnd import is_dnd_active
+                if await is_dnd_active(conn, user_id):
+                    logger.info(f"DND active, skipping card for message {ext_message_id}")
+                    # Create task but mark as muted
+                    task_id = await AsyncTaskDAO.create_task(conn, message_id, user_id)
+                    await AsyncTaskDAO.update_task_status(conn, task_id, 'muted')
+                    return
+
+                task_id = await AsyncTaskDAO.create_task(conn, message_id, user_id)
+
+                # 5. Send card to Telegram
+                await self.send_card_to_telegram(task_id, message_id, conn)
+
+            logger.info(f"Processed Discord message {ext_message_id}, created task {task_id}")
 
         except Exception as e:
             logger.error(f"Error handling Discord message: {e}", exc_info=True)
@@ -386,30 +444,55 @@ class ModeratorApplication:
                 throttle_key="discord_message_error"
             )
 
-    async def send_card_to_telegram(self, task: dict):
-        """
-        Send a task card to Telegram.
-
-        Args:
-            task: Task dictionary with message data
-        """
+    async def send_card_to_telegram(self, task_id: int, message_id: int, conn):
+        """Send message card to Telegram moderator."""
         try:
-            # TODO: Implement card sending logic
-            # This would:
-            # 1. Load context messages from database
-            # 2. Format card using telegram.cards
-            # 3. Create keyboard with action buttons
-            # 4. Send to moderator via Telegram bot
-            # 5. Store telegram message ID in task
+            from database.dao import MessageDAO, AsyncTaskDAO
+            from services.context import get_context_by_channel
+            from telegram.cards import format_card, create_card_keyboard
 
-            logger.info(f"Would send card for task {task.get('id')} to Telegram")
+            # Get message
+            message = await MessageDAO.get_message_by_id(conn, message_id)
+            if not message:
+                logger.error(f"Message {message_id} not found for task {task_id}")
+                return
+
+            # Get context (last 10 messages from same channel)
+            context_messages = await get_context_by_channel(
+                conn,
+                platform=message['platform'],
+                channel_id=message['channel_id'],
+                server_id=message['server_id'],
+                thread_id=message['thread_id'],
+                limit=10
+            )
+
+            # Format card
+            card_text = format_card(message, context_messages)
+            keyboard = create_card_keyboard(task_id)
+
+            # Send via Telegram bot
+            result = await self.telegram_bot.send_message(
+                chat_id=self.config.telegram.moderator_user_id,
+                text=card_text,
+                reply_markup=keyboard
+            )
+
+            if result.get('ok'):
+                # Save Telegram message ID in task
+                tg_message_id = result['result']['message_id']
+                await AsyncTaskDAO.update_task_card_id(conn, task_id, tg_message_id)
+                logger.info(f"Sent card for task {task_id}, TG message {tg_message_id}")
+            else:
+                logger.error(f"Failed to send card for task {task_id}: {result.get('description')}")
+                await AsyncTaskDAO.update_task_status(conn, task_id, 'error', f"Failed to send card: {result.get('description')}")
 
         except Exception as e:
             logger.error(f"Error sending card to Telegram: {e}", exc_info=True)
             await send_error_alert(
                 "Error sending card to Telegram",
                 context={
-                    "task_id": task.get("id"),
+                    "task_id": task_id,
                     "error": str(e)
                 },
                 throttle_key="telegram_card_error"

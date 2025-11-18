@@ -2,7 +2,7 @@
 Database connection management.
 
 This module handles:
-- PostgreSQL connection pool initialization using SQLAlchemy
+- PostgreSQL connection pool initialization using SQLAlchemy and asyncpg
 - Connection lifecycle management (creation, health checks, cleanup)
 - Transaction management and session handling
 - Connection retry logic with exponential backoff
@@ -15,6 +15,7 @@ components with proper error handling and resource cleanup.
 
 import os
 import time
+import asyncpg
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -345,3 +346,73 @@ def close_db():
     if _db_connection:
         _db_connection.disconnect()
         _db_connection = None
+
+
+# ============================================================================
+# Asyncpg connection pool for async operations
+# ============================================================================
+
+_asyncpg_pool: Optional[asyncpg.Pool] = None
+
+
+async def init_asyncpg_pool(
+    database_url: Optional[str] = None,
+    min_size: int = 5,
+    max_size: int = 15,
+    command_timeout: int = 60
+) -> asyncpg.Pool:
+    """
+    Initialize global asyncpg connection pool.
+
+    Args:
+        database_url: PostgreSQL connection URL
+        min_size: Minimum number of connections in pool
+        max_size: Maximum number of connections in pool
+        command_timeout: Command timeout in seconds
+
+    Returns:
+        asyncpg.Pool instance
+    """
+    global _asyncpg_pool
+
+    if not database_url:
+        database_url = os.getenv(
+            "DATABASE_URL",
+            "postgresql://postgres:postgres@localhost:5432/moderator_db"
+        )
+
+    _asyncpg_pool = await asyncpg.create_pool(
+        database_url,
+        min_size=min_size,
+        max_size=max_size,
+        command_timeout=command_timeout
+    )
+
+    return _asyncpg_pool
+
+
+def get_asyncpg_pool() -> asyncpg.Pool:
+    """
+    Get global asyncpg connection pool.
+
+    Returns:
+        asyncpg.Pool instance
+
+    Raises:
+        RuntimeError: If pool has not been initialized
+    """
+    if not _asyncpg_pool:
+        raise RuntimeError("Asyncpg pool not initialized. Call init_asyncpg_pool() first.")
+
+    return _asyncpg_pool
+
+
+async def close_asyncpg_pool():
+    """
+    Close global asyncpg connection pool and cleanup resources.
+    """
+    global _asyncpg_pool
+
+    if _asyncpg_pool:
+        await _asyncpg_pool.close()
+        _asyncpg_pool = None
