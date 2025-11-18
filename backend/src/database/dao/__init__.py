@@ -14,6 +14,7 @@ Available DAOs:
 - AllowlistDAO: Channel allowlist operations (channels_allowlist table)
 - AttachmentDAO: Attachment operations (attachments table)
 - AuditDAO: Audit log operations (audit_log table)
+- AIVariantDAO: AI response variant operations (ai_response_variants table)
 
 Usage:
     from database.dao import MessageDAO, TaskDAO, UserDAO
@@ -54,6 +55,7 @@ from .discord_dao import DiscordDAO
 from .allowlist_dao import AllowlistDAO
 from .attachment_dao import AttachmentDAO
 from .audit_dao import AuditDAO
+from .ai_variant_dao import AIVariantDAO
 
 __all__ = [
     'MessageDAO',
@@ -64,6 +66,7 @@ __all__ = [
     'AllowlistDAO',
     'AttachmentDAO',
     'AuditDAO',
+    'AIVariantDAO',
 ]
 
 # DAO method summary
@@ -162,6 +165,17 @@ DAO_SUMMARY = {
         'delete_old_logs',
         'get_event_statistics',
         'search_logs',
+    ],
+    'AIVariantDAO': [
+        'create_variant',
+        'get_variants_for_task',
+        'get_variant_by_id',
+        'mark_variant_selected',
+        'unmark_all_selected_for_task',
+        'get_selected_variant_for_task',
+        'delete_variants_for_task',
+        'delete_variant',
+        'count_variants_for_task',
     ],
 }
 

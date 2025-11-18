@@ -46,7 +46,13 @@ mock_config.get_config = Mock(return_value=Mock(
         user='test',
         password='test'
     ),
-    encryption_key='test_encryption_key_32_characters'
+    encryption_key='test_encryption_key_32_characters',
+    llm=Mock(
+        provider='openai',
+        model='gpt-4-turbo',
+        openai_api_key='test_openai_key',
+        anthropic_api_key='test_anthropic_key'
+    )
 ))
 sys.modules['config'] = mock_config
 

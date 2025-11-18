@@ -45,7 +45,40 @@ DEFAULT_CONTEXT_SIZE = 10
 # Card Formatting Functions
 # =============================================================================
 
-def format_card(message: dict, context_messages: list) -> str:
+def format_variants_section(variants: List[Dict]) -> str:
+    """
+    Format AI response variants for display in card.
+
+    Args:
+        variants: List of variant dicts with keys: id, variant_text, confidence_score, provider
+
+    Returns:
+        Formatted markdown string
+    """
+    if not variants:
+        return ""
+
+    section = "\n\n🤖 **AI Suggested Responses:**\n"
+
+    for idx, variant in enumerate(variants[:3], 1):  # Max 3 variants
+        confidence = variant.get('confidence_score', 0.0)
+        confidence_pct = int(confidence * 100)
+
+        # Truncate long responses
+        text = variant['variant_text']
+        if len(text) > 150:
+            text = text[:147] + "..."
+
+        # Format with confidence indicator
+        confidence_emoji = "🟢" if confidence >= 0.8 else "🟡" if confidence >= 0.6 else "🔴"
+
+        section += f"\n**Option {idx}** {confidence_emoji} ({confidence_pct}%)\n"
+        section += f"_{text}_\n"
+
+    return section
+
+
+def format_card(message: dict, context_messages: list, variants: Optional[List[Dict]] = None) -> str:
     """
     Format a message card for Telegram display.
 
@@ -60,6 +93,7 @@ def format_card(message: dict, context_messages: list) -> str:
             - platform_created_at: Timestamp
             - has_image: Boolean
         context_messages: List of previous messages (same format)
+        variants: Optional list of AI variant dicts
 
     Returns:
         Formatted card text string
@@ -157,8 +191,13 @@ def format_card(message: dict, context_messages: list) -> str:
 
     message_section = f"\n\n💬 Current Message:\n{message_content}{attachment_text}"
 
+    # Add variants section if provided
+    variants_section = ""
+    if variants:
+        variants_section = format_variants_section(variants)
+
     # Build card
-    card = f"{header}{context_text}{message_section}"
+    card = f"{header}{context_text}{message_section}{variants_section}"
 
     # Truncate if too long
     if len(card) > MAX_MESSAGE_LENGTH - 100:
@@ -316,32 +355,68 @@ def _truncate_text(text: str, max_length: int) -> str:
 # Keyboard Creation Functions
 # =============================================================================
 
-def create_card_keyboard(task_id: int, show_more: bool = True) -> dict:
+def create_card_keyboard(
+    task_id: int,
+    show_more: bool = True,
+    variants: Optional[List[Dict]] = None,
+    show_ai_buttons: bool = True
+) -> dict:
     """
     Create inline keyboard for message card.
 
     Args:
         task_id: Task ID for callback data
         show_more: Whether to show "Показать больше" button (default: True)
+        variants: AI response variants (if available)
+        show_ai_buttons: Show AI-related buttons (Soften, More variants)
 
     Returns:
         Telegram inline keyboard dict
     """
-    # First row - always has Reply button
-    first_row = [{"text": "✍️ Ответить", "callback_data": f"reply_{task_id}"}]
+    keyboard = {'inline_keyboard': []}
 
-    # Add "Show More" button if enabled
+    # Variant selection buttons (if variants provided)
+    if variants:
+        variant_row = []
+        for idx, variant in enumerate(variants[:3], 1):
+            variant_id = variant['id']
+            confidence = int(variant.get('confidence_score', 0) * 100)
+            variant_row.append({
+                'text': f'✨ Use Option {idx} ({confidence}%)',
+                'callback_data': f'use_variant_{variant_id}'
+            })
+
+        # Split into rows if more than 1 variant
+        if len(variant_row) > 1:
+            keyboard['inline_keyboard'].append([variant_row[0]])
+            if len(variant_row) > 1:
+                keyboard['inline_keyboard'].append(variant_row[1:])
+        else:
+            keyboard['inline_keyboard'].append(variant_row)
+
+    # Main action row
+    main_row = [
+        {'text': '✍️ Ответить', 'callback_data': f'reply_{task_id}'}
+    ]
     if show_more:
-        first_row.append({"text": "📖 Показать больше", "callback_data": f"more_{task_id}"})
+        main_row.append({'text': '📖 Показать больше', 'callback_data': f'more_{task_id}'})
+    keyboard['inline_keyboard'].append(main_row)
 
-    return {
-        "inline_keyboard": [
-            first_row,
-            [
-                {"text": "🔕 DND", "callback_data": "toggle_dnd"}
-            ]
+    # AI action row (if enabled)
+    if show_ai_buttons:
+        ai_row = [
+            {'text': '🎨 Soften', 'callback_data': f'soften_{task_id}'},
+            {'text': '🔄 More Variants', 'callback_data': f'more_variants_{task_id}'}
         ]
-    }
+        keyboard['inline_keyboard'].append(ai_row)
+
+    # Context row
+    context_row = [
+        {'text': '🔕 DND', 'callback_data': 'toggle_dnd'}
+    ]
+    keyboard['inline_keyboard'].append(context_row)
+
+    return keyboard
 
 
 def create_confirmation_keyboard(task_id: int) -> dict:

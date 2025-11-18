@@ -344,7 +344,35 @@ class AuditLog(Base):
         return f"<AuditLog(id={self.id}, kind={self.kind}, user_id={self.user_id})>"
 
 
+class AIResponseVariant(Base):
+    """
+    AI-generated response variants.
+
+    Stores AI-generated response options for tasks with metadata about
+    the generation process (provider, model, confidence, tone).
+    """
+    __tablename__ = "ai_response_variants"
+
+    # Columns
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    task_id = Column(BigInteger, ForeignKey("tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    variant_text = Column(Text, nullable=False)
+    confidence_score = Column(Float, nullable=True)  # 0.0 to 1.0
+    provider = Column(String(50), nullable=True)  # 'openai' or 'anthropic'
+    model = Column(String(100), nullable=True)  # 'gpt-4-turbo', 'claude-3-opus', etc.
+    tone = Column(String(50), nullable=True)  # NULL, 'soft', 'formal'
+    selected = Column(Boolean, nullable=False, default=False, index=True)  # Was this variant selected?
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    task = relationship("Task", backref="ai_variants")
+
+    def __repr__(self):
+        return f"<AIResponseVariant(id={self.id}, task_id={self.task_id}, provider={self.provider}, selected={self.selected})>"
+
+
 # Composite indexes for query optimization
 Index("idx_tasks_assignee_status", Task.assignee_user_id, Task.status)
 Index("idx_messages_channel_created", Message.channel_id, Message.created_at.desc())
 Index("idx_messages_author_created", Message.author_id, Message.created_at.desc())
+Index("idx_ai_variants_task_selected", AIResponseVariant.task_id, AIResponseVariant.selected)

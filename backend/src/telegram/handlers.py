@@ -1332,6 +1332,254 @@ async def callback_cancel_reply(query: dict, bot: 'TelegramBot'):
     logger.info(f"User {user_id} cancelled reply")
 
 
+async def callback_use_variant(query: dict, bot: 'TelegramBot'):
+    """
+    Handle use_variant_{variant_id} callback.
+
+    User selected an AI-generated variant to use as their reply.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+
+    # Extract variant_id
+    try:
+        variant_id = int(data.split('_')[2])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.send_message(chat_id, "❌ Error: Invalid callback data")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.ai_variant_dao import AIVariantDAO
+    from ..database.dao.reply_dao import ReplyDAO
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get variant
+            variant_query = "SELECT * FROM ai_response_variants WHERE id = $1"
+            variant_row = await conn.fetchrow(variant_query, variant_id)
+
+            if not variant_row:
+                await bot.send_message(chat_id, "❌ Variant not found")
+                return
+
+            variant = dict(variant_row)
+            task_id = variant['task_id']
+            variant_text = variant['variant_text']
+
+            # Create reply with AI-generated text
+            reply_id = await ReplyDAO.create_reply(
+                conn,
+                task_id=task_id,
+                content=variant_text,
+                generated_by='ai',
+                llm_confidence=variant.get('confidence_score'),
+                edit_of=None
+            )
+
+            # Mark variant as selected
+            await AIVariantDAO.mark_variant_selected(conn, variant_id)
+
+            logger.info(f"User {user_id} selected AI variant {variant_id} for task {task_id}")
+
+            # Show confirmation with preview
+            preview_text = f"""✅ **AI Response Selected**
+
+Your reply (AI-generated):
+---
+{variant_text}
+---
+
+Confidence: {int(variant.get('confidence_score', 0) * 100)}%
+Provider: {variant.get('provider', 'unknown')}
+
+Please confirm to send this message."""
+
+            # Confirmation keyboard
+            keyboard = {
+                'inline_keyboard': [
+                    [
+                        {'text': '✅ Confirm & Send', 'callback_data': f'confirm_{reply_id}'},
+                        {'text': '✏️ Edit', 'callback_data': f'edit_reply_{reply_id}'},
+                        {'text': '❌ Cancel', 'callback_data': f'cancel_reply_{reply_id}'}
+                    ]
+                ]
+            }
+
+            await bot.send_message(chat_id, preview_text, reply_markup=keyboard, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Error using variant {variant_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+
+
+async def callback_soften(query: dict, bot: 'TelegramBot'):
+    """
+    Handle soften_{task_id} callback.
+
+    Regenerate response variants with 'soft' tone.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    # Extract task_id
+    try:
+        task_id = int(data.split('_')[1])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        return
+
+    await bot.send_message(chat_id, "🎨 Softening response... Please wait.")
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.task_dao import TaskDAO
+    from ..services.response_generation import ResponseGenerationService
+    from ..telegram.cards import format_card, create_card_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get task
+            task = await TaskDAO.get_task_by_id(conn, task_id)
+            if not task:
+                await bot.send_message(chat_id, "❌ Task not found")
+                return
+
+            message_id_db = task['source_message_id']
+
+            # Generate soft variants
+            variants = await ResponseGenerationService.soften_response(task_id, message_id_db)
+
+            if not variants:
+                await bot.send_message(chat_id, "❌ Failed to generate soft responses")
+                return
+
+            # Get message for card
+            from ..database.dao.message_dao import MessageDAO
+            msg = await MessageDAO.get_message_by_id(conn, message_id_db)
+
+            # Reload context
+            from ..services.context import get_context_by_channel
+            context_messages = await get_context_by_channel(
+                conn,
+                platform=msg['platform'],
+                channel_id=msg['channel_id'],
+                server_id=msg.get('server_id'),
+                thread_id=msg.get('thread_id'),
+                before_message_id=message_id_db,
+                limit=10
+            )
+
+            # Update card with new variants
+            updated_card = format_card(msg, context_messages, variants=variants)
+            keyboard = create_card_keyboard(task_id, variants=variants)
+
+            success = await bot.edit_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=updated_card,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+
+            if success:
+                logger.info(f"Softened response for task {task_id}, {len(variants)} new variants")
+            else:
+                await bot.send_message(chat_id, f"✅ Generated {len(variants)} soft responses (see above)")
+
+    except Exception as e:
+        logger.error(f"Error softening response for task {task_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+
+
+async def callback_more_variants(query: dict, bot: 'TelegramBot'):
+    """
+    Handle more_variants_{task_id} callback.
+
+    Generate additional response variants.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    # Extract task_id
+    try:
+        task_id = int(data.split('_')[2])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        return
+
+    await bot.send_message(chat_id, "🔄 Generating more variants... Please wait.")
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.task_dao import TaskDAO
+    from ..services.response_generation import ResponseGenerationService
+    from ..telegram.cards import format_card, create_card_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get task
+            task = await TaskDAO.get_task_by_id(conn, task_id)
+            if not task:
+                await bot.send_message(chat_id, "❌ Task not found")
+                return
+
+            message_id_db = task['source_message_id']
+
+            # Generate more variants
+            variants = await ResponseGenerationService.generate_variants(task_id, message_id_db)
+
+            if not variants:
+                await bot.send_message(chat_id, "❌ Failed to generate variants")
+                return
+
+            # Get message for card
+            from ..database.dao.message_dao import MessageDAO
+            msg = await MessageDAO.get_message_by_id(conn, message_id_db)
+
+            # Reload context
+            from ..services.context import get_context_by_channel
+            context_messages = await get_context_by_channel(
+                conn,
+                platform=msg['platform'],
+                channel_id=msg['channel_id'],
+                server_id=msg.get('server_id'),
+                thread_id=msg.get('thread_id'),
+                before_message_id=message_id_db,
+                limit=10
+            )
+
+            # Update card with new variants
+            updated_card = format_card(msg, context_messages, variants=variants)
+            keyboard = create_card_keyboard(task_id, variants=variants)
+
+            success = await bot.edit_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=updated_card,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+
+            if success:
+                logger.info(f"Generated {len(variants)} new variants for task {task_id}")
+            else:
+                await bot.send_message(chat_id, f"✅ Generated {len(variants)} variants (see above)")
+
+    except Exception as e:
+        logger.error(f"Error generating variants for task {task_id}: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+
+
 # =============================================================================
 # Handler Registration
 # =============================================================================
@@ -1363,6 +1611,9 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_callback_handler('retry_', callback_retry)
     bot.register_callback_handler('toggle_dnd', callback_toggle_dnd)
     bot.register_callback_handler('cancel_reply', callback_cancel_reply)
+    bot.register_callback_handler('use_variant_', callback_use_variant)
+    bot.register_callback_handler('soften_', callback_soften)
+    bot.register_callback_handler('more_variants_', callback_more_variants)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

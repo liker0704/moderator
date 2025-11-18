@@ -302,16 +302,24 @@ ALERT_CHAT_ID=987654321
 LOG_LEVEL=INFO  # DEBUG for development, INFO for production
 ```
 
-### Optional Variables (v0.2+)
+### LLM Configuration (v0.2+)
+
+For AI-powered response suggestions:
 
 ```bash
 # ============================================
-# LLM Configuration (v0.2+)
+# LLM Configuration
 # ============================================
 LLM_PROVIDER=openai  # or 'anthropic'
-OPENAI_API_KEY=sk-your_openai_api_key_here
 LLM_MODEL=gpt-4-turbo
+OPENAI_API_KEY=sk-your_openai_api_key_here
+# OR
+ANTHROPIC_API_KEY=sk-ant-your_anthropic_api_key_here
 ```
+
+**Supported models:**
+- OpenAI: `gpt-4-turbo`, `gpt-4`, `gpt-3.5-turbo`
+- Anthropic: `claude-3-opus-20240229`, `claude-3-sonnet-20240229`, `claude-3-haiku-20240307`
 
 ### Generate Encryption Key
 
