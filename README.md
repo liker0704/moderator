@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: v1.0.4
-**Status**: v1.0 Iteration 4 - Search Functionality Complete ✅
+**Version**: v1.0.5
+**Status**: v1.0 Iteration 5 - Statistics & Metrics Complete ✅
 **Last Updated**: November 19, 2025
 
 ---
@@ -139,10 +139,22 @@ This system is designed for a **single moderator** (single-user system).
 - Database indexes for search performance
 - 942 lines of new code
 
+### v1.0 New Features (Iteration 5)
+
+**✅ Statistics & Metrics** (2025-11-19)
+- 11 different metrics covering moderation activity
+- Interactive period switching (24h, 7d, 30d, all-time)
+- Response time analytics and task completion stats
+- Channel activity breakdown and top performers
+- LLM usage metrics with cost tracking
+- Visual statistics dashboard command
+- New command: /stats
+- Database indexes for analytics performance
+- 1,489 lines of new code
+
 ### Planned Features
 
 **v1.0** (Remaining)
-- Basic metrics and analytics
 - Quick reply templates
 
 See [ROADMAP.md](docs/ROADMAP.md) for detailed version plans.
@@ -650,6 +662,12 @@ The **[Edit]** button is available for replies sent within the last 48 hours.
 | `/search` | Search messages with filters (text, author, channel, date range) |
 | `/search_help` | Show search help and usage examples |
 
+#### Statistics & Metrics (v1.0 Iteration 5)
+
+| Command | Description |
+|---------|-------------|
+| `/stats` | View statistics and metrics (response time, activity, LLM usage) |
+
 ### Common Workflows
 
 #### Workflow 1: Respond to a Discord Message
@@ -744,6 +762,31 @@ Or set up automatic schedule:
 # Get help:
 /search_help
 → Shows search syntax, examples, and tips
+```
+
+#### Workflow 7: View Statistics & Metrics (v1.0 Iteration 5)
+
+```
+# View stats with default period (24 hours)
+/stats
+
+# Displays metrics:
+→ Total messages received: 127
+→ Avg response time: 8 minutes 23 seconds
+→ Open tasks >24h: 3
+→ Completed tasks: 156
+→ Most active channel: #general (42 msgs)
+→ LLM requests (24h): 45
+→ LLM cost (24h): $0.87
+
+# Interactive period switching:
+→ [24h] [7d] [30d] [All-time]
+→ Click to update statistics for different time ranges
+
+# View full breakdown:
+→ Channel activity breakdown
+→ Top responders by task completion
+→ LLM usage by model
 ```
 
 📖 For detailed usage instructions, see [docs/USER_GUIDE.md](docs/USER_GUIDE.md)

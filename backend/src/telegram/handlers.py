@@ -136,6 +136,9 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 /search <query> - Search message history with filters
 /search_help - Show search syntax and examples
 
+📊 Statistics & Metrics:
+/stats [7|30|90] - View statistics and metrics (default: 30 days)
+
 🖥️ Multi-Server Support:
 /servers - List Discord servers with allowlist stats
 /channels [server_id] - Show channels for a server
@@ -3027,6 +3030,90 @@ async def cmd_search_help(message: dict, bot: 'TelegramBot'):
     logger.info(f"Showed search help to user {user_id}")
 
 
+async def cmd_stats(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /stats command.
+
+    Shows comprehensive statistics and metrics for the user.
+    Usage: /stats [7|30|90] - Optional period in days (default: 30)
+    """
+    user_id = message['from']['id']
+
+    # Parse period from command arguments
+    period_days = 30  # Default
+    text = message.get('text', '').strip()
+    parts = text.split()
+
+    if len(parts) > 1:
+        try:
+            period_days = int(parts[1])
+            # Validate period
+            if period_days not in [7, 30, 90]:
+                await bot.send_message(
+                    user_id,
+                    "❌ Invalid period. Please use 7, 30, or 90 days.\n\nExample: /stats 30"
+                )
+                return
+        except ValueError:
+            await bot.send_message(
+                user_id,
+                "❌ Invalid period format. Please use a number (7, 30, or 90).\n\nExample: /stats 30"
+            )
+            return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.stats import StatsService
+    from .cards import format_stats_card, create_stats_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    # Send "generating" message
+    status_msg = await bot.send_message(
+        user_id,
+        f"📊 Generating statistics for the last {period_days} days...\n\nPlease wait..."
+    )
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.edit_message_text(
+                    user_id,
+                    status_msg['message_id'],
+                    "❌ User not found. Please use /start to initialize."
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Generate statistics report
+            stats = await StatsService.generate_stats_report(conn, user_id_db, period_days)
+
+            # Format the stats card
+            card_text = format_stats_card(stats, period_days)
+            keyboard = create_stats_keyboard(period_days)
+
+            # Update message with stats
+            await bot.edit_message_text(
+                user_id,
+                status_msg['message_id'],
+                card_text,
+                reply_markup=keyboard
+            )
+
+            logger.info(f"Showed statistics to user {user_id} (period: {period_days} days)")
+
+    except Exception as e:
+        logger.error(f"Error generating stats for user {user_id}: {e}", exc_info=True)
+        await bot.edit_message_text(
+            user_id,
+            status_msg['message_id'],
+            f"❌ Error generating statistics: {str(e)}\n\nPlease try again later."
+        )
+
+
 # =============================================================================
 # Multi-Server Support Callback Handlers
 # =============================================================================
@@ -4121,6 +4208,137 @@ async def callback_search_back(query: dict, bot: 'TelegramBot'):
 
 
 # =============================================================================
+# Statistics Callback Handlers
+# =============================================================================
+
+async def callback_stats_period(query: dict, bot: 'TelegramBot'):
+    """
+    Handle stats_period_{days} callback to switch time period.
+
+    Updates the statistics display with a different time period (7, 30, or 90 days).
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+    callback_data = query['data']
+
+    # Extract period from callback_data (format: stats_period_30)
+    try:
+        period_days = int(callback_data.split('_')[-1])
+    except (ValueError, IndexError):
+        await bot.answer_callback_query(query['id'], "❌ Invalid period", show_alert=True)
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.stats import StatsService
+    from .cards import format_stats_card, create_stats_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    # Show "generating" indicator
+    await bot.answer_callback_query(query['id'], f"📊 Generating {period_days}-day stats...")
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Generate statistics report
+            stats = await StatsService.generate_stats_report(conn, user_id_db, period_days)
+
+            # Format the stats card
+            card_text = format_stats_card(stats, period_days)
+            keyboard = create_stats_keyboard(period_days)
+
+            # Update message
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card_text,
+                reply_markup=keyboard
+            )
+
+            logger.info(f"Updated statistics period to {period_days} days for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating stats period for user {user_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            f"❌ Error updating statistics: {str(e)}",
+            show_alert=True
+        )
+
+
+async def callback_stats_refresh(query: dict, bot: 'TelegramBot'):
+    """
+    Handle stats_refresh_{period} callback to refresh statistics.
+
+    Regenerates the statistics report for the current period.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+    callback_data = query['data']
+
+    # Extract period from callback_data (format: stats_refresh_30)
+    try:
+        period_days = int(callback_data.split('_')[-1])
+    except (ValueError, IndexError):
+        period_days = 30  # Default
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.stats import StatsService
+    from .cards import format_stats_card, create_stats_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    # Show "refreshing" indicator
+    await bot.answer_callback_query(query['id'], "🔄 Refreshing statistics...")
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Generate statistics report
+            stats = await StatsService.generate_stats_report(conn, user_id_db, period_days)
+
+            # Format the stats card
+            card_text = format_stats_card(stats, period_days)
+            keyboard = create_stats_keyboard(period_days)
+
+            # Update message
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card_text,
+                reply_markup=keyboard
+            )
+
+            logger.info(f"Refreshed statistics for user {user_id} (period: {period_days} days)")
+
+    except Exception as e:
+        logger.error(f"Error refreshing stats for user {user_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            f"❌ Error refreshing statistics: {str(e)}",
+            show_alert=True
+        )
+
+
+# =============================================================================
 # Handler Registration
 # =============================================================================
 
@@ -4152,6 +4370,9 @@ def register_all_handlers(bot: 'TelegramBot'):
     # Search command handlers
     bot.register_command_handler('/search', cmd_search)
     bot.register_command_handler('/search_help', cmd_search_help)
+
+    # Statistics command handlers
+    bot.register_command_handler('/stats', cmd_stats)
 
     # Callback handlers
     bot.register_callback_handler('reply_', callback_reply)
@@ -4199,6 +4420,10 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_callback_handler('search_help', callback_search_help)
     bot.register_callback_handler('search_example', callback_search_example)
     bot.register_callback_handler('search_back', callback_search_back)
+
+    # Statistics callbacks
+    bot.register_callback_handler('stats_period_', callback_stats_period)
+    bot.register_callback_handler('stats_refresh_', callback_stats_refresh)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

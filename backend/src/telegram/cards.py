@@ -1298,6 +1298,247 @@ def create_example_card() -> tuple[str, dict]:
     return card_text, keyboard
 
 
+def format_stats_card(stats: dict, period_days: int) -> str:
+    """
+    Format comprehensive statistics report for Telegram display.
+
+    Args:
+        stats: Statistics dictionary from StatsService.generate_stats_report()
+        period_days: Number of days in the reporting period
+
+    Returns:
+        Formatted stats card text
+
+    Example:
+        >>> from ..services.stats import StatsService
+        >>> report = await StatsService.generate_stats_report(conn, user_id=1, period_days=30)
+        >>> card = format_stats_card(report, 30)
+    """
+    from ..services.stats import StatsService
+
+    # Header
+    card = f"📊 Statistics Report\n"
+    card += f"Period: Last {period_days} day{'s' if period_days != 1 else ''}\n"
+    card += f"Generated: {stats['generated_at'].strftime('%Y-%m-%d %H:%M UTC')}\n"
+
+    # Task Overview Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"📋 Task Overview\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    task_stats = stats['task_stats']
+    total_tasks = task_stats['total']
+    completed = task_stats['completed']
+    pending = task_stats['pending']
+
+    card += f"Total Tasks: {StatsService.format_number(total_tasks)}\n"
+    card += f"✅ Completed: {StatsService.format_number(completed)}\n"
+    card += f"⏳ Pending: {StatsService.format_number(pending)}\n"
+
+    if task_stats['muted'] > 0:
+        card += f"🔕 Muted: {StatsService.format_number(task_stats['muted'])}\n"
+    if task_stats['error'] > 0:
+        card += f"❌ Error: {StatsService.format_number(task_stats['error'])}\n"
+
+    if total_tasks > 0:
+        completion_rate = StatsService.calculate_completion_rate(completed, total_tasks)
+        progress_bar = StatsService.create_progress_bar(completed, total_tasks, width=10)
+        card += f"\nCompletion Rate: {StatsService.format_percentage(completion_rate)}\n"
+        card += f"{progress_bar}\n"
+
+    # Response Time Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"⏱️ Response Time\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    avg_time = stats['response_time']['average']
+    if avg_time is not None:
+        card += f"Average: {StatsService.format_duration(avg_time)}\n"
+
+        percentiles = stats['response_time']['percentiles']
+        if percentiles['p50'] is not None:
+            card += f"P50 (Median): {StatsService.format_duration(percentiles['p50'])}\n"
+        if percentiles['p95'] is not None:
+            card += f"P95: {StatsService.format_duration(percentiles['p95'])}\n"
+        if percentiles['p99'] is not None:
+            card += f"P99: {StatsService.format_duration(percentiles['p99'])}\n"
+
+        # Distribution
+        distribution = stats['response_time']['distribution']
+        dist_total = sum(distribution.values())
+        if dist_total > 0:
+            card += f"\nDistribution:\n"
+            card += f"  < 5 min:  {distribution['under_5min']:3d} {StatsService.create_progress_bar(distribution['under_5min'], dist_total, 5)}\n"
+            card += f"  < 30 min: {distribution['under_30min']:3d} {StatsService.create_progress_bar(distribution['under_30min'], dist_total, 5)}\n"
+            card += f"  < 1 hour: {distribution['under_1h']:3d} {StatsService.create_progress_bar(distribution['under_1h'], dist_total, 5)}\n"
+            card += f"  < 6 hour: {distribution['under_6h']:3d} {StatsService.create_progress_bar(distribution['under_6h'], dist_total, 5)}\n"
+            card += f"  > 6 hour: {distribution['over_6h']:3d} {StatsService.create_progress_bar(distribution['over_6h'], dist_total, 5)}\n"
+    else:
+        card += "No response data available\n"
+
+    # Channel Activity Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"📡 Channel Activity\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    channel_load = stats['channel_load']
+    if channel_load:
+        card += f"Top {min(len(channel_load), 5)} busiest channels:\n\n"
+        for idx, channel in enumerate(channel_load[:5], 1):
+            platform_emoji = "💬" if channel['platform'] == 'telegram' else "📝"
+            channel_id_short = StatsService.format_channel_id(channel['channel_id'], 12)
+            msg_count = channel['message_count']
+            card += f"{idx}. {platform_emoji} {channel_id_short}\n"
+            card += f"   Messages: {StatsService.format_number(msg_count)}\n"
+    else:
+        card += "No channel activity data\n"
+
+    # Platform Breakdown
+    platform_breakdown = stats['platform_breakdown']
+    total_messages = sum(platform_breakdown.values())
+    if total_messages > 0:
+        card += f"\nPlatform Breakdown:\n"
+        discord_count = platform_breakdown.get('discord', 0)
+        telegram_count = platform_breakdown.get('telegram', 0)
+
+        if discord_count > 0:
+            discord_pct = (discord_count / total_messages) * 100
+            card += f"📝 Discord: {StatsService.format_number(discord_count)} ({discord_pct:.0f}%)\n"
+
+        if telegram_count > 0:
+            telegram_pct = (telegram_count / total_messages) * 100
+            card += f"💬 Telegram: {StatsService.format_number(telegram_count)} ({telegram_pct:.0f}%)\n"
+
+    # LLM Usage Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"🤖 LLM Usage\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    llm_stats = stats['llm_usage']
+    total_requests = llm_stats['total_requests']
+
+    if total_requests > 0:
+        card += f"Total Requests: {StatsService.format_number(total_requests)}\n"
+        card += f"✅ Successful: {StatsService.format_number(llm_stats['successful_requests'])}\n"
+        if llm_stats['failed_requests'] > 0:
+            card += f"❌ Failed: {StatsService.format_number(llm_stats['failed_requests'])}\n"
+
+        success_rate = StatsService.calculate_success_rate(
+            llm_stats['successful_requests'],
+            total_requests
+        )
+        card += f"Success Rate: {StatsService.format_percentage(success_rate)}\n"
+
+        card += f"\nCost: {StatsService.format_cost(llm_stats['total_cost'])}\n"
+        card += f"Avg Cost/Request: {StatsService.format_cost(llm_stats['avg_cost'])}\n"
+
+        card += f"\nTokens: {StatsService.format_tokens(llm_stats['total_tokens'])}\n"
+        card += f"Avg Tokens/Request: {int(llm_stats['avg_tokens'])}\n"
+
+        # LLM Provider Breakdown
+        llm_breakdown = stats['llm_breakdown']
+        if llm_breakdown:
+            card += f"\nBy Provider/Model:\n"
+            for item in llm_breakdown[:3]:  # Top 3
+                provider = item['provider']
+                model = item['model']
+                cost = StatsService.format_cost(item['total_cost'])
+                requests = item['request_count']
+                card += f"  {provider}/{model[:20]}\n"
+                card += f"    {requests} req, {cost}\n"
+    else:
+        card += "No LLM usage data\n"
+
+    # Unclosed Tasks Section
+    unclosed_tasks = stats['unclosed_tasks']
+    if unclosed_tasks:
+        card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"⚠️ Unclosed Tasks (>24h)\n"
+        card += f"━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"Count: {len(unclosed_tasks)}\n\n"
+
+        for idx, task in enumerate(unclosed_tasks[:5], 1):  # Show max 5
+            age_str = StatsService.format_duration(task['age_seconds'])
+            author = task['author_name'] or 'Unknown'
+            content = task['content'] or '[No content]'
+            if len(content) > 50:
+                content = content[:47] + "..."
+
+            card += f"{idx}. Task #{task['id']} ({age_str} old)\n"
+            card += f"   From: {author}\n"
+            card += f"   {content}\n"
+
+        if len(unclosed_tasks) > 5:
+            card += f"\n... and {len(unclosed_tasks) - 5} more\n"
+
+    # Activity Distribution (optional)
+    hourly_dist = stats['hourly_distribution']
+    peak_hour = StatsService.get_peak_hour(hourly_dist)
+    if peak_hour is not None:
+        card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"📈 Activity Pattern\n"
+        card += f"━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"Peak Hour: {peak_hour:02d}:00 UTC\n"
+
+        # Show activity sparkline for peak hours
+        max_count = max(hourly_dist.values()) if hourly_dist else 0
+        if max_count > 0:
+            card += f"\nBusiest Hours:\n"
+            # Find top 5 hours
+            sorted_hours = sorted(hourly_dist.items(), key=lambda x: x[1], reverse=True)[:5]
+            for hour, count in sorted_hours:
+                if count > 0:
+                    bar = StatsService.create_progress_bar(count, max_count, width=8)
+                    card += f"  {hour:02d}:00  {bar} {count}\n"
+
+    # Footer
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"💡 Use buttons below to change time period\n"
+
+    # Truncate if too long
+    if len(card) > MAX_MESSAGE_LENGTH - 100:
+        card = card[:MAX_MESSAGE_LENGTH - 200] + "\n\n[Report truncated...]"
+
+    return card
+
+
+def create_stats_keyboard(current_period: int = 30) -> dict:
+    """
+    Create inline keyboard for statistics period selection.
+
+    Args:
+        current_period: Currently selected period in days
+
+    Returns:
+        Telegram inline keyboard dict
+
+    Example:
+        >>> keyboard = create_stats_keyboard(current_period=30)
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Period selection row
+    period_options = [7, 30, 90]
+    period_row = []
+
+    for period in period_options:
+        # Mark current period with checkmark
+        text = f"{'✓ ' if period == current_period else ''}{period} days"
+        period_row.append({
+            'text': text,
+            'callback_data': f'stats_period_{period}'
+        })
+
+    keyboard['inline_keyboard'].append(period_row)
+
+    # Refresh button
+    keyboard['inline_keyboard'].append([
+        {'text': '🔄 Refresh', 'callback_data': f'stats_refresh_{current_period}'}
+    ])
+
+    return keyboard
+
+
 if __name__ == '__main__':
     # Test card generation
     card_text, keyboard = create_example_card()

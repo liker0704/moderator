@@ -6,6 +6,44 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.0.5] - 2025-11-19
+
+### Added
+- Statistics and metrics functionality with /stats command
+- 11 different metrics for monitoring moderation activity:
+  - Total messages received
+  - Average response time (in minutes and seconds)
+  - Open tasks exceeding 24 hours
+  - Completed tasks count
+  - Most active channel (by message count)
+  - LLM requests count (by period)
+  - LLM usage cost (token-based calculation)
+  - Response distribution by channel
+  - Top responders by task completion rate
+  - LLM usage breakdown by model
+  - Task completion rate
+- Interactive period switching (24h, 7d, 30d, all-time)
+- Inline keyboard buttons for period selection in Telegram cards
+- New StatsDAO for aggregated statistics queries
+- New StatsService for metrics calculation and formatting
+- Database indexes for analytics query optimization
+- Formatted statistics display with visual hierarchy
+
+### Changed
+- Enhanced message cards to include stats period selector
+- Updated help system to document /stats command
+- Added statistics category to help system
+
+### Technical
+- New DAO: StatsDAO for statistics queries
+- New service: StatsService for metrics aggregation
+- Database migration: Indexes on messages, tasks, replies, llm_requests tables
+- 1,489 lines of new code
+- Integration with existing card formatting system
+- Async statistics aggregation without blocking
+
+---
+
 ## [v1.0.4] - 2025-11-19
 
 ### Added
