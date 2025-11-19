@@ -1,337 +1,572 @@
-# Руководство пользователя
+# User Guide - Discord ↔ Telegram Moderator Console
 
-## Введение
+## Introduction
 
-Это руководство для модератора по использованию TG-консоли для управления сообщениями из Discord и Telegram.
+This user guide provides complete instructions for using the Discord-Telegram Moderator Console. This system allows you to manage messages from Discord servers and Telegram DMs through a unified Telegram bot interface.
 
-## Первоначальная настройка
+**Version**: v1.0 (Stable Release)
+**Last Updated**: November 19, 2025
 
-### Шаг 1: Запуск бота
+---
 
-1. Найдите бота в Telegram (получите ссылку у администратора)
-2. Нажмите `/start`
-3. Бот ответит приветствием и предложит настройку
+## Table of Contents
 
-### Шаг 2: Настройка Discord подключения
+- [Getting Started](#getting-started)
+- [Initial Setup](#initial-setup)
+- [Working with Message Cards](#working-with-message-cards)
+- [Bot Commands Reference](#bot-commands-reference)
+- [Advanced Features](#advanced-features)
+- [Common Workflows](#common-workflows)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Tips and Best Practices](#tips-and-best-practices)
 
-**Команда**: `/setup_discord`
+---
 
-1. Отправьте `/setup_discord`
-2. Бот попросит вам отправить User Token
+## Getting Started
 
-**Как получить User Token**:
+### Prerequisites
 
-1. Откройте Discord Web (https://discord.com/app) в браузере
-2. Войдите в ваш аккаунт Discord
-3. Откройте DevTools (F12)
-4. Перейдите во вкладку Console
-5. Вставьте этот код и нажмите Enter:
+Before you begin, ensure you have:
+
+- A Telegram account
+- The Telegram bot link (provided by your administrator)
+- Your Telegram User ID (get from [@userinfobot](https://t.me/userinfobot))
+- Access to Discord (for obtaining your User Token)
+
+### First Steps
+
+1. **Open Telegram** and find your moderator bot
+2. **Send `/start`** to initialize the bot
+3. The bot will respond with a welcome message and instructions
+
+---
+
+## Initial Setup
+
+### Step 1: Start the Bot
+
+```
+/start
+```
+
+**Expected Response**:
+```
+Welcome to the Discord-Telegram Moderator Console!
+
+This bot helps you moderate messages from Discord and Telegram
+in a unified interface. Let's get started with setup.
+
+First, configure your Discord connection: /setup_discord
+```
+
+### Step 2: Configure Discord Connection
+
+Command: **`/setup_discord`**
+
+#### How to Get Your Discord User Token
+
+⚠️ **IMPORTANT**: This is your personal Discord account token. Never share it with anyone!
+
+1. Open **Discord Web** at https://discord.com/app in your browser
+2. Log in to your Discord account
+3. Open **Developer Tools** (Press `F12`)
+4. Go to the **Console** tab
+5. Paste this code and press Enter:
 
 ```javascript
 (webpackChunkdiscord_app.push([[''],{},e=>{m=[];for(let c in e.c)m.push(e.c[c])}]),m).find(m=>m?.exports?.default?.getToken!==void 0).exports.default.getToken()
 ```
 
-6. Скопируйте токен (длинная строка)
-7. Отправьте токен боту в Telegram
+6. **Copy the token** (long string that appears)
+7. **Send the token** to the bot in Telegram
 
-**ВАЖНО**: Никому не передавайте этот токен. Это ваш личный ключ доступа к Discord.
+The bot will:
+- Encrypt and securely store the token in the database
+- Attempt to connect to Discord Gateway
+- Confirm successful connection or show an error
 
-3. Бот сохранит токен (зашифрованный) и попробует подключиться
-4. Вы получите сообщение об успехе или ошибке
+### Step 3: Verify Connection
 
-### Шаг 3: Проверка подключения
+Command: **`/test_connection`**
 
-**Команда**: `/test_connection`
-
-Отправьте эту команду, чтобы убедиться, что подключение к Discord работает.
-
-**Ожидаемый результат**:
+**Expected Response** (if successful):
 ```
-✅ Подключение к Discord активно
-Подключено к 3 серверам
-Последнее сообщение: 2 минуты назад
+✅ Connection to Discord active
+Connected to 3 servers
+Last message: 2 minutes ago
 ```
 
-### Шаг 4: Добавление каналов в allowlist
+If you see an error, verify your token and try `/setup_discord` again.
 
-**Команда**: `/allow_channel {server_id} {channel_id}`
+### Step 4: Add Channels to Allowlist
 
-Чтобы начать получать сообщения из канала, добавьте его в allowlist.
+To receive messages from specific Discord channels, you must add them to the allowlist.
 
-**Как узнать ID**:
+#### Get Channel and Server IDs
 
-1. В Discord включите Developer Mode:
-   - Settings → Advanced → Developer Mode (включить)
+1. In Discord, enable **Developer Mode**:
+   - Settings → Advanced → Developer Mode (toggle ON)
 
-2. Правой кнопкой на сервере → Copy Server ID
-3. Правой кнопкой на канале → Copy Channel ID
+2. Right-click on a server → **Copy Server ID**
+3. Right-click on a channel → **Copy Channel ID**
 
-**Пример**:
+#### Add Channels
+
+Command: **`/allow_channel {server_id} {channel_id}`**
+
+**Example**:
 ```
 /allow_channel 111111111111111111 222222222222222222
 ```
 
-**Результат**:
+**Expected Response**:
 ```
-✅ Канал #general добавлен в allowlist
+✅ Channel #general added to allowlist
 Server: My Discord Server
 ```
 
-Теперь вы будете получать карточки для всех сообщений из этого канала.
+Repeat this for all channels you want to moderate.
 
-## Работа с карточками
+#### Alternative: Multi-Server Management (v1.0.3+)
 
-### Формат карточки
+For easier management with multiple channels:
 
-Когда приходит новое сообщение, бот отправляет карточку:
+1. **Browse servers**: `/servers`
+2. **View channels**: `/channels {server_id}`
+3. **Bulk add channels**: `/bulk_allow {server_id}`
+
+This allows you to select multiple channels at once from a server.
+
+### Step 5: Test the System
+
+1. Send a message in one of your allowlisted Discord channels
+2. You should receive a **message card** in Telegram within seconds
+3. Try responding to verify the full workflow
+
+---
+
+## Working with Message Cards
+
+### Understanding Message Cards
+
+When a new message arrives from Discord or Telegram, the bot sends a **message card**:
 
 ```
-Discord • My Server • #general • @username • 12:34:56
+📝 Discord • My Server • #general • @username • 12:34:56
 
 Context:
 [12:30] user1: Previous message
 [12:32] user2: Another message
 [12:34] username: Current message text here
 
-[Ответить] [Показать больше] [DND]
+🖼 Image: https://cdn.discord.com/attachments/...
+
+[Reply] [Show More] [DND]
 ```
 
-### Элементы карточки
+#### Card Elements
 
-- **Заголовок**: платформа, сервер, канал, автор, время
-- **Контекст**: последние ~10 сообщений из этого канала
-- **Кнопки**: действия
+- **Header**: Platform, server, channel, author, timestamp
+- **Context**: Last ~10 messages from this channel (for conversation context)
+- **Attachments**: Images, files, or links (if any)
+- **Buttons**: Action buttons for responding or managing
 
-### Действия с карточкой
+### Actions with Message Cards
 
-#### 1. Ответить
+#### 1. Reply to a Message
 
-Нажмите кнопку **[Ответить]**
+Click **[Reply]** button
 
-1. Бот запросит: "Введите ваш ответ:"
-2. Напишите текст ответа (только plain text, без форматирования)
-3. Бот покажет подтверждение:
+**Workflow**:
+1. Bot prompts: "Enter your response:"
+2. Type your reply (plain text only, no Markdown)
+3. Bot shows confirmation:
+   ```
+   Your response:
+   "Your message text here"
 
-```
-Ваш ответ:
-"Текст вашего ответа"
+   Send to #general?
 
-[Подтвердить] [Отменить]
-```
+   [Confirm] [Cancel]
+   ```
+4. Click **[Confirm]**
+5. Message is posted to Discord/Telegram
+6. Card updates to show success:
+   ```
+   ✅ Sent to #general at 12:35:20
+   Your reply: "Your message text"
 
-4. Нажмите **[Подтвердить]**
-5. Бот отправит сообщение в исходный канал Discord/Telegram
-6. Карточка обновится:
+   [Edit] [Delete] [View History]
+   ```
 
-```
-✅ Отправлено в #general в 12:35:20
-```
+**Important**: Without confirmation, nothing is sent. You can always cancel before confirming.
 
-**Важно**: Без подтверждения ничего не отправляется.
+#### 2. Show More Context
 
-#### 2. Показать больше контекста
+Click **[Show More]** button
 
-Нажмите **[Показать больше]**
+The bot loads the next 10 messages from the conversation history and updates the card in-place. You can click multiple times to load more context—there's no limit.
 
-Бот догрузит следующие 10 сообщений из истории канала.
+**Progressive Loading**:
+- First click: Load 10 more messages (total: 20)
+- Second click: Load 10 more messages (total: 30)
+- Continues indefinitely
 
-Можно нажимать несколько раз - лимита нет.
+#### 3. Enable Do Not Disturb (DND)
 
-#### 3. DND (Не беспокоить)
+Click **[DND]** button or use `/dnd on`
 
-Нажмите **[DND]** или используйте команду `/dnd`
+When DND is active:
+- New message cards stop arriving
+- Messages are still saved in the database
+- You can re-enable cards with `/dnd off`
 
-**Режимы**:
+See [Do Not Disturb Mode](#do-not-disturb-mode) for advanced scheduling.
 
-- **Ручной**: `/dnd on` или `/dnd off`
-- **По расписанию**: `/dnd` (откроется меню настройки)
+#### 4. Edit Sent Replies (v1.0.2+)
 
-При активном DND новые карточки не приходят. Сообщения сохраняются в БД, но не показываются.
+After sending a reply, you'll see an **[Edit]** button if:
+- The reply was sent within the last **48 hours**
+- The message still exists in Discord/Telegram
 
-### Обработка ошибок
+**Editing Workflow**:
+1. Click **[Edit]** button
+2. Current reply text is shown
+3. Type the new text
+4. Click **[Confirm]** to update
+5. Edit is sent to Discord/Telegram
+6. Card updates with new text
 
-Если отправка не удалась, карточка покажет:
+All edits are tracked in the audit log with complete history.
 
-```
-❌ Ошибка отправки
-Причина: Missing Access
+### Handling Errors
 
-[Повторить] [Отменить]
-```
-
-Нажмите **[Повторить]**, чтобы попробовать снова.
-
-**Частые ошибки**:
-- **Missing Access** - нет прав доступа к каналу
-- **Invalid Token** - токен Discord устарел или неверен
-- **Channel not found** - канал удален или недоступен
-- **Rate Limited** - превышен лимит запросов (подождите немного)
-
-## Команды бота
-
-### Общие команды
-
-#### /start
-Запуск бота и приветствие.
-
-#### /help
-Показать список всех команд.
+If posting fails, the card shows an error:
 
 ```
-Доступные команды:
+❌ Error sending reply
+Error: Missing Access
 
-Настройка и статус:
-/setup_discord - Настроить Discord подключение
-/test_connection - Проверить Discord подключение
-/discord_status - Статус Discord подключения
-/status - Общий статус системы
-
-DND:
-/dnd [on|off] - Включить/выключить режим "Не беспокоить"
-
-Allowlist (v0.2+):
-/allow_channel {server_id} {channel_id} - Добавить канал
-/unallow_channel {channel_id} - Удалить канал
-
-Другие:
-/settings - Настройки
-/help - Эта справка
+[Retry] [Cancel]
 ```
+
+Click **[Retry]** after resolving the issue.
+
+#### Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| **Missing Access** | No permission in Discord channel | Verify bot permissions |
+| **Invalid Token** | Discord token expired | Run `/setup_discord` again |
+| **Channel Not Found** | Channel deleted or inaccessible | Remove from allowlist |
+| **Rate Limited** | Too many requests | Wait a moment and retry |
 
 ---
 
-### Настройка и статус
+## Bot Commands Reference
 
-#### /setup_discord
-Настройка Discord User Token (см. Шаг 2 выше).
+### Setup and Status Commands
 
-#### /test_connection
-Проверка подключения к Discord Gateway.
+#### `/start`
+Initialize the bot and show welcome message.
 
-**Пример ответа**:
+#### `/help`
+Show interactive help system with 5 categories:
+- 🔧 Setup & Configuration
+- ⚙️ Settings & Management
+- 📝 Working with Message Cards
+- 🔍 Troubleshooting
+- 🤖 AI Features
+
+Navigate with buttons and access specific help topics.
+
+#### `/setup_discord`
+Configure Discord User Token. See [Initial Setup](#step-2-configure-discord-connection).
+
+#### `/test_connection`
+Verify Discord Gateway connection is active.
+
+**Example Response**:
 ```
-✅ Подключение к Discord активно
-Подключено к 3 серверам
-Последнее сообщение: 2 минуты назад
-```
-
-или
-
-```
-❌ Ошибка подключения
-Причина: Invalid token
-Действие: Повторите /setup_discord
-```
-
-#### /discord_status
-Подробный статус Discord подключения.
-
-**Пример**:
-```
-Discord Connection Status:
-- Status: connected
-- Session ID: abc123...
-- Last heartbeat: 30s ago
-- Servers: 3
-- Channels in allowlist: 5
+✅ Connection to Discord active
+Connected to 3 servers
+Last message: 2 minutes ago
 ```
 
-#### /status
-Общий статус системы.
+#### `/discord_status`
+Detailed Discord connection status including session ID, heartbeat, and server count.
 
-**Пример**:
+#### `/status`
+Overall system status showing:
+- Open tasks
+- Tasks processed today
+- DND status
+- Discord connection status
+- Database health
+
+**Example**:
 ```
 System Status:
-- Open tasks: 12
-- Tasks today: 47
-- DND: OFF
-- Discord: ✅ Connected
-- Database: ✅ OK
+━━━━━━━━━━━━━━━━━━━━━
+Open tasks: 12
+Tasks today: 47
+DND: OFF
+Discord: ✅ Connected
+Database: ✅ OK
+Redis: ✅ OK
+━━━━━━━━━━━━━━━━━━━━━
 ```
 
----
+### Do Not Disturb Mode
 
-### Режим DND
+#### `/dnd on`
+Manually enable DND mode. New cards stop arriving.
 
-#### /dnd on
-Включить режим "Не беспокоить".
+#### `/dnd off`
+Manually disable DND mode. Cards resume.
 
-Новые карточки перестанут приходить. Сообщения продолжат сохраняться.
+#### `/dnd`
+Open DND settings menu with options to:
+- Enable/disable DND
+- Configure schedule (automatic DND)
+- Set time intervals and days
 
-#### /dnd off
-Выключить DND.
+**Schedule Example**:
+```
+Configure DND Schedule:
 
-#### /dnd
-Открыть меню настройки расписания DND.
+Current: OFF
 
-**Настройка расписания**:
+Presets:
+[Weeknights] - Mon-Fri, 22:00-08:00
+[Weekends] - Sat-Sun, all day
+[Always] - 24/7
+[Custom] - Set your own intervals
+```
 
-1. Отправить `/dnd`
-2. Бот покажет текущие настройки и меню
-3. Можно настроить интервалы времени и дни недели
+### Channel Management
 
-**Пример расписания**:
-- Будние дни (Пн-Пт): 22:00 - 08:00
-- Выходные (Сб-Вс): весь день
+#### `/allow_channel {server_id} {channel_id}`
+Add a Discord channel to the allowlist.
 
----
-
-### Управление allowlist
-
-#### /allow_channel {server_id} {channel_id}
-Добавить Discord канал в allowlist.
-
-**Формат**:
+**Example**:
 ```
 /allow_channel 111111111111111111 222222222222222222
 ```
 
-**Результат**:
+#### `/unallow_channel`
+Remove a channel from allowlist with interactive selection dialog (v0.2.7+).
+
+**Workflow**:
+1. Send `/unallow_channel`
+2. Bot shows all allowlisted channels
+3. Click channel to remove
+4. Confirm removal
+
+**Legacy**: `/unallow_channel {channel_id}` still works for direct removal.
+
+#### `/settings`
+View and manage all settings:
+- Discord connection status
+- DND status
+- Allowlist channels (actual data from database)
+- Action buttons for quick access
+
+**Example Display**:
 ```
-✅ Канал #general добавлен в allowlist
-Server: My Discord Server
+⚙️ Settings
+━━━━━━━━━━━━━━━━━━━━━
+
+Discord Connection:
+Status: ✅ Connected
+Last connected: 2 minutes ago
+
+DND Mode:
+Status: OFF
+
+Allowlist Channels: 5
+• #general (My Server)
+• #support (My Server)
+• #bugs (Other Server)
+• #alerts (Other Server)
+• #moderation (Other Server)
+
+[➕ Add Channel] [➖ Remove Channel]
+[🔕 Toggle DND] [🔄 Refresh]
 ```
 
-#### /unallow_channel {channel_id}
-Удалить канал из allowlist.
+### Multi-Server Management (v1.0.3+)
 
-**Формат**:
+#### `/servers`
+Browse all Discord servers you're connected to.
+
+**Response**: List of servers with buttons to view channels.
+
+#### `/channels {server_id}`
+View all channels in a specific server.
+
+**Example**:
 ```
-/unallow_channel 222222222222222222
+/channels 111111111111111111
 ```
 
-**Результат**:
+Shows channels with indicators for which are already in your allowlist.
+
+#### `/bulk_allow {server_id}`
+Add multiple channels from a server at once.
+
+**Workflow**:
+1. Send `/bulk_allow {server_id}`
+2. Bot shows all channels with checkboxes
+3. Select channels to add
+4. Confirm bulk addition
+5. All selected channels added to allowlist
+
+### Search Functionality (v1.0.4+)
+
+#### `/search`
+Search through message history with filters.
+
+**Workflow**:
+1. Send `/search`
+2. Bot prompts for search parameters:
+   - **Text**: Search within message content
+   - **Author**: Filter by username
+   - **Channel**: Filter by channel
+   - **Date range**: Specify start and end dates
+3. Results displayed with pagination (10 per page)
+
+**Example Interaction**:
 ```
-✅ Канал #general удален из allowlist
+Search Message History
+━━━━━━━━━━━━━━━━━━━━━
+
+Enter search text (or skip): urgent
+
+Author filter (or skip): @john
+
+Channel filter (or skip): #support
+
+Date range (YYYY-MM-DD to YYYY-MM-DD, or skip): 2025-11-01 to 2025-11-19
+
+Searching...
+
+Found 47 results
+
+Showing 1-10 of 47
+
+[Result 1] [Result 2] [Result 3] ...
+
+[Prev] [1] [2] [3] [4] [5] [Next]
 ```
 
-Сообщения из этого канала больше не будут поступать.
+#### `/search_help`
+Show search syntax, examples, and tips.
+
+### Statistics & Analytics (v1.0.5+)
+
+#### `/stats`
+View comprehensive statistics and metrics.
+
+**Metrics Included**:
+- Total messages received
+- Average response time
+- Open tasks exceeding 24 hours
+- Completed tasks count
+- Most active channel
+- LLM requests count (if enabled)
+- LLM usage cost
+- Response distribution by channel
+- Top responders
+- Task completion rate
+
+**Period Switching**:
+Use buttons to switch between time periods:
+- [24h] - Last 24 hours
+- [7d] - Last 7 days
+- [30d] - Last 30 days
+- [All-time] - Since beginning
+
+**Example Display**:
+```
+📊 Statistics (Last 7 days)
+━━━━━━━━━━━━━━━━━━━━━
+
+Messages Received: 234
+Avg Response Time: 8 min 23 sec
+Open Tasks >24h: 3
+Completed Tasks: 156
+
+Most Active Channel:
+#general - 87 messages
+
+LLM Usage:
+Requests: 45
+Cost: $0.87
+
+[24h] [7d] [30d] [All-time]
+[Channel Breakdown] [Details]
+```
+
+### Quick Reply Templates (v1.0.6+)
+
+#### `/templates list`
+Show all saved reply templates.
+
+#### `/templates add`
+Create a new template with optional variables.
+
+**Variables Supported**:
+- `{user}` - Username
+- `{channel}` - Channel name
+- `{timestamp}` - Current timestamp
+- `{server}` - Server name
+
+**Example**:
+```
+/templates add
+
+Name: greeting
+Category: greeting
+Text: Hello {user}! Thanks for reaching out in {channel}. How can I help?
+```
+
+#### `/templates delete`
+Remove a template with interactive selection.
+
+**Template Usage**:
+When replying to a message, saved templates appear as quick-action buttons for one-click insertion.
+
+### Data Export & Privacy (v1.0.7+)
+
+#### `/export`
+Export message history to JSON format.
+
+**Options**:
+- `--anonymize`: Remove sensitive data (usernames, IDs)
+- `--date-range {start} {end}`: Export specific date range
+- `--channels {ch1,ch2}`: Export specific channels only
+- `--authors {user1,user2}`: Export specific users only
+
+**Example**:
+```
+/export --anonymize --date-range 2025-11-01 2025-11-19
+```
+
+Generates a JSON file with all message history, optionally anonymized.
 
 ---
 
-### Настройки
+## Advanced Features
 
-#### /settings
-Просмотр и изменение настроек.
+### AI-Powered Response Suggestions (v0.2+)
 
-**Показывает**:
-- Статус DND
-- Статус напоминаний (v0.2+)
-- Количество каналов в allowlist
-- Другие настройки
+When LLM integration is enabled, message cards include AI-generated response variants.
 
----
-
-## Работа с LLM (v0.2+)
-
-### Генерация вариантов ответов
-
-Начиная с версии v0.2, бот может генерировать варианты ответов с помощью AI.
-
-**Карточка с вариантами**:
-
+**Card with AI Suggestions**:
 ```
-Discord • Server • #channel • @user • 12:34
+📝 Discord • Server • #channel • @user • 12:34
 
 Context:
 [12:30] user1: Message 1
@@ -339,189 +574,454 @@ Context:
 
 🤖 AI Suggestions:
 
-Вариант 1: [Generated response 1]
-Вариант 2: [Generated response 2]
+Variant 1 (Confidence: 85%): [Generated response 1]
+Variant 2 (Confidence: 78%): [Generated response 2]
 
-[Вариант 1] [Вариант 2]
-[Ещё варианты] [Смягчить...] [Ответить вручную]
+[Use Variant 1] [Use Variant 2]
+[More Variants] [Soften...] [Reply Manually]
 ```
 
-### Действия
+#### Actions
 
-#### Выбрать вариант
-Нажмите **[Вариант 1]** или **[Вариант 2]**
+**Select a Variant**:
+- Click **[Use Variant 1]** or **[Use Variant 2]**
+- Bot shows confirmation dialog
+- Click **[Confirm]** to send
 
-Бот покажет выбранный вариант с кнопкой подтверждения.
+**Generate More Variants**:
+- Click **[More Variants]**
+- AI generates 2 new responses
+- Replace previous variants
 
-#### Ещё варианты
-Нажмите **[Ещё варианты]**
+**Soften Response**:
+- Type your own reply first
+- Click **[Soften...]**
+- AI rephrases your text to be more polite/professional
+- Review and confirm
 
-AI сгенерирует 2 новых варианта ответа.
+**Reply Manually**:
+- Click **[Reply Manually]**
+- Proceed with standard reply workflow
+- Ignores AI suggestions
 
-#### Смягчить
-Если вы написали ответ вручную и хотите сделать его более вежливым:
+#### Low Confidence Warning
 
-1. Напишите свой ответ
-2. Нажмите **[Смягчить...]**
-3. AI перефразирует ваш текст в более мягкий тон
-4. Подтвердите или отредактируйте
-
-#### Ответить вручную
-Нажмите **[Ответить вручную]**, чтобы игнорировать AI варианты и написать свой ответ.
-
-### Низкая уверенность модели
-
-Если AI не уверен в ответе, вы увидите:
-
+If AI confidence is below 70%, you'll see:
 ```
-⚠️ Модель не уверена в этом ответе
-
-Вариант 1: ...
+⚠️ Model is not confident in this response
+Confidence: 62%
 ```
 
-Рекомендуется проверить вариант перед отправкой или написать ответ вручную.
+**Recommendation**: Review carefully or write your own response.
 
-## Сценарии использования
+### Reminder System (v0.2+)
 
-### Сценарий 1: Ответ на сообщение из Discord
+The system automatically sends reminders for open tasks:
 
-1. Получаете карточку в Telegram
-2. Читаете контекст (при необходимости "Показать больше")
-3. Нажимаете "Ответить"
-4. Вводите текст ответа
-5. Подтверждаете
-6. Ответ отправляется в Discord
+- **Frequency**: Every 30 minutes
+- **Maximum**: 3 reminders per task
+- **Condition**: Task is open and no response sent
+- **Respects**: DND mode (no reminders during DND)
 
-### Сценарий 2: Ответ на DM в Telegram
+**Reminder Message Example**:
+```
+🔔 Reminder: Open Task
 
-То же самое, что Сценарий 1, но источник - Telegram DM.
+Channel: #general
+From: @username
+Age: 2 hours 15 minutes
+Message: "Current message text..."
 
-### Сценарий 3: Использование DND
+This is reminder #2 of 3.
 
-**Ситуация**: Конец рабочего дня, не хотите получать карточки.
+[View Task] [Reply Now] [Snooze]
+```
 
-1. Отправьте `/dnd on`
-2. Карточки перестанут приходить
-3. Утром: `/dnd off`
-4. Карточки снова поступают
+Enable/disable reminders in `/settings`.
 
-**Или настройте расписание**:
-1. `/dnd`
-2. Настройте: Пн-Пт 18:00-09:00
-3. DND будет автоматически включаться/выключаться
+### Error Handling System (v0.2.7+)
 
-### Сценарий 4: Добавление нового канала
+All errors use standardized error codes in format `ERR-XXX-NNN`:
 
-**Ситуация**: Нужно начать модерировать новый канал.
+**Example Error Message**:
+```
+❌ Error Code: ERR-DISCORD-001
+Failed to Post Message to Discord
 
-1. В Discord: включите Developer Mode
-2. Скопируйте Server ID и Channel ID
-3. В Telegram: `/allow_channel {server_id} {channel_id}`
-4. Готово - сообщения из канала начнут поступать
+Reason: Missing Access
+Details: No permission to send messages in #general
 
-### Сценарий 5: Ошибка отправки
+Recovery Steps:
+1. Verify you have permissions in the Discord channel
+2. Check if the channel still exists
+3. Try sending a test message manually in Discord
 
-**Ситуация**: Ответ не отправился (например, канал удален).
+Request ID: REQ-A3F29B7C
+```
 
-1. Видите карточку с ошибкой
-2. Читаете причину ошибки
-3. Если можно исправить - нажимаете "Повторить"
-4. Если нет - игнорируете или удаляете allowlist
+### Health Check & Monitoring (v1.0.1+)
+
+System administrators can monitor health via HTTP endpoint:
+
+**Endpoint**: `GET http://localhost:8000/health`
+
+**Response**:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2025-11-19T12:00:00.000000Z",
+  "checks": {
+    "discord": {
+      "status": "healthy",
+      "connected": true,
+      "session_id": "abc123..."
+    },
+    "database": {
+      "status": "healthy",
+      "response_time_ms": 12.34
+    },
+    "redis": {
+      "status": "healthy",
+      "response_time_ms": 5.67
+    },
+    "llm": {
+      "status": "configured",
+      "provider": "openai",
+      "model": "gpt-4-turbo"
+    }
+  },
+  "version": "1.0.0"
+}
+```
+
+### Prometheus Metrics (v1.0.8+)
+
+For advanced monitoring with Prometheus/Grafana:
+
+**Endpoint**: `GET http://localhost:8000/metrics`
+
+**Metrics Available**:
+- `moderator_tasks_total` - Total tasks by status
+- `moderator_messages_received_total` - Messages by platform
+- `moderator_replies_sent_total` - Replies sent
+- `moderator_open_tasks` - Current open tasks (gauge)
+- `moderator_response_time_seconds` - Response latency histogram
+- `moderator_llm_response_time_seconds` - LLM latency histogram
+
+---
+
+## Common Workflows
+
+### Workflow 1: Respond to a Discord Message
+
+1. Receive message card in Telegram
+2. Read context (click "Show More" if needed)
+3. Click "Reply"
+4. Type your response
+5. Click "Confirm"
+6. Message sent to Discord
+
+**Total Time**: ~30 seconds
+
+### Workflow 2: Enable DND for the Evening
+
+**Option A - Manual**:
+```
+Before bed:
+/dnd on
+
+Next morning:
+/dnd off
+```
+
+**Option B - Automatic Schedule**:
+```
+/dnd
+→ Select "Weeknights"
+→ Configured: Mon-Fri, 22:00-08:00
+→ Auto-enable/disable daily
+```
+
+### Workflow 3: Edit a Sent Reply
+
+1. Locate the sent card (shows ✅ Sent...)
+2. Click **[Edit]** button (available for 48 hours)
+3. Current text shown
+4. Type new text
+5. Click **[Confirm]**
+6. Edit applied to Discord/Telegram
+7. Card updates with new text
+
+### Workflow 4: Add Multiple Channels from a Server
+
+```
+Step 1: Browse servers
+/servers
+→ View all connected servers
+
+Step 2: View channels
+Click on "My Server"
+→ Shows all channels in that server
+
+Step 3: Bulk add
+/bulk_allow 111111111111111111
+→ Select: #general, #support, #alerts
+→ Confirm
+→ All 3 channels added to allowlist
+
+Step 4: Verify
+/settings
+→ See all new channels listed
+```
+
+### Workflow 5: Search for Past Messages
+
+```
+Step 1: Start search
+/search
+
+Step 2: Enter filters
+→ Text: "urgent"
+→ Author: @john
+→ Channel: #support
+→ Date: 2025-11-01 to 2025-11-19
+
+Step 3: Browse results
+→ Showing 1-10 of 47 results
+→ Click [2] to go to page 2
+→ Click on a result to see full message
+
+Step 4: Take action
+→ Can reply or edit directly from search results
+```
+
+### Workflow 6: Review Statistics
+
+```
+Step 1: View stats
+/stats
+
+Step 2: Choose period
+→ Click [7d] for last 7 days
+→ Shows activity metrics
+
+Step 3: Drill down
+→ Click [Channel Breakdown]
+→ See per-channel statistics
+→ Identify busiest channels
+
+Step 4: Export data (if needed)
+/export --date-range 2025-11-01 2025-11-19
+```
+
+---
+
+## Troubleshooting
+
+### Bot Not Responding to Commands
+
+**Check**:
+1. You're messaging the bot directly (not in a group)
+2. You've sent `/start` to initialize
+3. The bot service is running
+
+**Solution**: Contact your administrator if the bot is offline.
+
+### No Message Cards Arriving from Discord
+
+**Checklist**:
+- [ ] Discord connection active? → `/test_connection`
+- [ ] Channel in allowlist? → `/settings`
+- [ ] DND mode off? → `/dnd off`
+- [ ] Messages sent in allowlisted channel?
+- [ ] Backend service running?
+
+**Debug**:
+```
+/test_connection
+→ Verify Discord is connected
+
+/settings
+→ Check allowlist includes the channel
+
+/dnd off
+→ Ensure DND is disabled
+
+/status
+→ Check overall system health
+```
+
+### Reply Not Sending
+
+**Common Causes**:
+
+1. **Missing Access**: No permission in Discord channel
+   - **Solution**: Verify bot/account permissions
+
+2. **Invalid Token**: Discord token expired
+   - **Solution**: Run `/setup_discord` with new token
+
+3. **Channel Not Found**: Channel deleted
+   - **Solution**: Remove from allowlist with `/unallow_channel`
+
+4. **Rate Limited**: Too many requests
+   - **Solution**: Wait a moment and click [Retry]
+
+**Always**: Check the error message in the card for specific guidance.
+
+### Edit Button Missing
+
+**Requirements for Edit Button**:
+- Reply sent within last **48 hours**
+- Original message still exists
+- Discord/Telegram API supports editing
+
+If button is missing, the time window has expired. You cannot edit older replies.
+
+### Search Returns No Results
+
+**Tips**:
+- Check spelling in search text
+- Broaden date range
+- Remove author/channel filters
+- Try simpler search terms
+- Verify messages exist in that period
+
+### Statistics Show Zero
+
+**Possible Reasons**:
+- No activity in selected time period
+- Database not tracking metrics (check logs)
+- Try longer time period (switch to [30d] or [All-time])
+
+---
 
 ## FAQ
 
-### Q: Бот не отвечает на команды
+### Q: Can I use Markdown or formatting in replies?
 
-**A**: Проверьте:
-1. Вы написали боту в личные сообщения (не в группу)
-2. Вы начали диалог с `/start`
-3. Бот работает (спросите у администратора)
+**A**: No, the system only supports plain text by design. This ensures compatibility with both Discord and Telegram.
 
-### Q: Не приходят карточки из Discord
+### Q: How long are messages stored?
 
-**A**: Проверьте:
-1. `/test_connection` - подключение активно?
-2. `/status` - есть ли open tasks?
-3. Канал добавлен в allowlist? Проверьте `/settings`
-4. DND выключен? Проверьте `/dnd off`
+**A**: Messages are stored for **90 days** and then automatically deleted. This is a privacy/storage policy.
 
-### Q: Ответ не отправляется
+### Q: Can multiple moderators use the system?
 
-**A**:
-1. Проверьте ошибку в карточке
-2. "Missing Access" - нет прав в канале Discord
-3. "Invalid Token" - токен устарел, повторите `/setup_discord`
-4. Нажмите "Повторить" после исправления
+**A**: No, this is a **single-user system**. Only one moderator can use it at a time.
 
-### Q: Как удалить канал из allowlist?
+### Q: What happens to messages during DND?
 
-**A**: `/unallow_channel {channel_id}`
+**A**: Messages are still **saved in the database** but cards are not sent. When you disable DND, past messages are NOT retroactively shown (by design).
 
-### Q: Можно ли использовать Markdown/форматирование в ответах?
+### Q: Can I get Desktop notifications?
 
-**A**: Нет, по дизайну поддерживается только plain text.
+**A**: Yes, configure Telegram Desktop to show notifications for the bot's messages.
 
-### Q: Как посмотреть историю всех сообщений?
+### Q: Is my Discord token safe?
 
-**A**: Используйте кнопку "Показать больше" в карточке. Можно нажимать много раз.
+**A**: Yes, it's encrypted with AES-256 (Fernet) and stored securely in the database. However, you should still use a dedicated Discord account if possible.
 
-### Q: Что делать если забыл Discord токен?
+### Q: How much does LLM cost?
 
-**A**: Повторите процедуру получения токена (см. Шаг 2) и отправьте `/setup_discord` заново.
+**A**: Depends on usage. The system tracks costs and shows them in `/stats`. Set budget alerts in your LLM provider dashboard.
 
-### Q: Можно ли использовать бота с нескольких аккаунтов Telegram?
+### Q: Can I export my data?
 
-**A**: Нет, система поддерживает только одного модератора.
+**A**: Yes, use `/export` to generate a JSON file with all message history. You can also anonymize it for privacy.
 
-### Q: Сохраняются ли сообщения, если DND включен?
+### Q: What if I accidentally send a wrong message?
 
-**A**: Да, сообщения сохраняются в БД, но карточки не отправляются. После выключения DND они не появятся (по дизайну).
+**A**: Use the **[Edit]** button (available for 48 hours) to correct sent replies. All edits are tracked in the audit log.
 
-### Q: Как долго хранятся сообщения?
+### Q: Why did I receive a reminder?
 
-**A**: 90 дней. После этого автоматически удаляются.
+**A**: The system sends reminders for open tasks every 30 minutes (max 3 per task). Disable in `/settings` if you don't want reminders.
 
-## Советы и лучшие практики
+---
 
-### 1. Используйте контекст
+## Tips and Best Practices
 
-Всегда читайте контекст перед ответом. Нажимайте "Показать больше" если нужно.
+### 1. Always Read Context
 
-### 2. Проверяйте перед подтверждением
+Before replying, click **[Show More]** to load additional context. Understanding the full conversation prevents miscommunication.
 
-Внимательно читайте текст ответа перед нажатием "Подтвердить" - отменить отправленное сложно.
+### 2. Review Before Confirming
 
-### 3. Настройте DND расписание
+The confirmation dialog is your safety net. Always review your reply text before clicking **[Confirm]**.
 
-Вместо ручного вкл/выкл используйте расписание - удобнее.
+### 3. Use DND Schedules
 
-### 4. Регулярно проверяйте /status
+Instead of manually toggling DND, set up automatic schedules that match your work hours. This prevents interruptions during off-hours.
 
-Чтобы не пропустить сообщения и видеть общую нагрузку.
+### 4. Regularly Check `/status`
 
-### 5. Используйте AI варианты (v0.2+)
+Monitor system health and task backlog with `/status`. This helps you stay on top of pending work.
 
-Экономит время, но всегда проверяйте перед отправкой.
+### 5. Leverage AI Suggestions
 
-### 6. Периодически проверяйте allowlist
+AI variants can save time, but always review before sending. The confidence score indicates reliability.
 
-Удаляйте неактуальные каналы через /unallow_channel.
+### 6. Organize with Search
 
-## Безопасность
+Use `/search` to quickly find past conversations, especially when users reference previous discussions.
 
-### Не передавайте никому:
+### 7. Review Statistics
+
+Check `/stats` weekly to identify:
+- Busiest channels (consider adding more moderators)
+- Response time trends (are you meeting SLAs?)
+- LLM costs (budget management)
+
+### 8. Use Templates for Common Replies
+
+Create templates for frequently used responses:
+- Greetings
+- Closing statements
+- Support ticket acknowledgments
+- FAQ answers
+
+This maintains consistency and saves typing time.
+
+### 9. Keep Allowlist Clean
+
+Periodically review `/settings` and remove inactive or irrelevant channels from your allowlist.
+
+### 10. Backup Your Configuration
+
+Export your data regularly with `/export` as a backup. Store exports securely.
+
+---
+
+## Security Best Practices
+
+### Never Share
+
 - Discord User Token
-- Telegram Bot Token (если есть доступ)
-- Ссылку на бота
+- Telegram Bot Token
+- Bot link (if private)
+- Exported data (contains message history)
 
-### Если токен скомпрометирован:
-1. Смените пароль Discord
-2. Выйдите из всех сеансов Discord
-3. Получите новый токен
-4. Отправьте `/setup_discord` с новым токеном
+### If Token is Compromised
 
-## Заключение
+1. **Change Discord password immediately**
+2. **Logout all Discord sessions**: Settings → Logout All Devices
+3. **Get new token** using the procedure in Step 2
+4. **Run `/setup_discord`** with the new token
+5. **Monitor activity** for unauthorized access
 
-Бот предоставляет единую консоль для модерации сообщений из Discord и Telegram. Все действия интуитивны и требуют подтверждения.
+### Regular Security Checks
 
-Если возникли вопросы или проблемы - обратитесь к администратору системы.
+- Review allowlist channels monthly
+- Check `/discord_status` for unusual activity
+- Monitor system logs for errors or intrusions
+
+---
+
+## Conclusion
+
+The Discord-Telegram Moderator Console provides a powerful, unified interface for managing messages across platforms. With features like AI-powered suggestions, comprehensive search, detailed statistics, and flexible workflows, it streamlines moderation tasks significantly.
+
+For questions, issues, or feature requests, contact your system administrator or consult the technical documentation in the `docs/` directory.
+
+**Happy Moderating!** 🎉
