@@ -17,6 +17,8 @@ Commands:
 - /servers: List available Discord servers with allowlist counts
 - /channels [server_id]: Show channels for a server with allowlist status
 - /bulk_allow [server_id]: Bulk add multiple channels to allowlist
+- /search <query>: Search message history with advanced filters
+- /search_help: Show search syntax help and examples
 
 Callback handlers:
 - reply_{task_id}: Start reply flow for a task
@@ -49,6 +51,11 @@ Callback handlers:
 - bulk_toggle_{server_id}_{channel_id}: Toggle channel in bulk selection
 - bulk_confirm_{server_id}: Confirm and execute bulk add to allowlist
 - bulk_cancel: Cancel bulk allow operation
+- search_page_{page}: Navigate to specific search results page
+- search_new: Start a new search
+- search_help: Show search syntax help
+- search_example: Run an example search
+- search_back: Return to previous search results
 
 Each handler processes user input, interacts with services layer,
 and provides appropriate responses and keyboard layouts.
@@ -124,6 +131,15 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 /status - Show system status (DND, channels, etc.)
 /dnd [on|off|schedule] - Toggle or configure DND mode
 /settings - View/edit all settings (with action buttons)
+
+🔍 Search & History:
+/search <query> - Search message history with filters
+/search_help - Show search syntax and examples
+
+🖥️ Multi-Server Support:
+/servers - List Discord servers with allowlist stats
+/channels [server_id] - Show channels for a server
+/bulk_allow [server_id] - Bulk add channels to allowlist
 
 ℹ️ General:
 /help - Show this help message
@@ -2903,6 +2919,114 @@ Example:
         await bot.send_message(user_id, f"❌ Error: {str(e)}")
 
 
+async def cmd_search(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /search command.
+
+    Searches message history with advanced filters and pagination.
+    Usage: /search <query>
+    Example: /search hello author:john from:2025-11-01
+    """
+    user_id = message['from']['id']
+    text = message.get('text', '')
+
+    # Extract query (remove /search command)
+    parts = text.split(maxsplit=1)
+    query_string = parts[1] if len(parts) > 1 else ''
+
+    # If no query provided, show help
+    if not query_string.strip():
+        from .cards import format_search_help_card
+        help_text = format_search_help_card()
+        keyboard = {
+            'inline_keyboard': [[
+                {'text': '🔍 Try Example Search', 'callback_data': 'search_example'}
+            ]]
+        }
+        await bot.send_message(user_id, help_text, reply_markup=keyboard)
+        logger.info(f"Showed search help to user {user_id}")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Execute search (page 1)
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                query_string,
+                page=1,
+                results_per_page=10
+            )
+
+            # Store search state in bot for pagination
+            bot.set_search_state(user_id, {
+                'query_string': query_string,
+                'current_page': 1
+            })
+
+            # Format results
+            card = format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=query_string
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=query_string,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            await bot.send_message(user_id, card, reply_markup=keyboard)
+            logger.info(f"Executed search for user {user_id}: '{query_string}' - {search_result['total_count']} results")
+
+    except Exception as e:
+        logger.error(f"Error in cmd_search: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Search error: {str(e)}\n\nUse /search_help for syntax help.")
+
+
+async def cmd_search_help(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /search_help command.
+
+    Shows search syntax help and examples.
+    """
+    user_id = message['from']['id']
+
+    from .cards import format_search_help_card
+
+    help_text = format_search_help_card()
+    keyboard = {
+        'inline_keyboard': [[
+            {'text': '🔍 Try Example Search', 'callback_data': 'search_example'}
+        ]]
+    }
+
+    await bot.send_message(user_id, help_text, reply_markup=keyboard)
+    logger.info(f"Showed search help to user {user_id}")
+
+
 # =============================================================================
 # Multi-Server Support Callback Handlers
 # =============================================================================
@@ -3668,6 +3792,335 @@ async def _show_bulk_allow_selection(
 
 
 # =============================================================================
+# Search Callback Handlers
+# =============================================================================
+
+async def callback_search_page(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_page_{page} callback for search result pagination.
+
+    Updates the search results message with the requested page.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+    callback_data = query['data']
+
+    # Extract page number from callback_data (format: search_page_2)
+    try:
+        page = int(callback_data.split('_')[-1])
+    except (ValueError, IndexError):
+        await bot.answer_callback_query(query['id'], "❌ Invalid page number")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        # Get search state from bot
+        search_state = bot.get_search_state(user_id)
+        if not search_state or 'query_string' not in search_state:
+            await bot.answer_callback_query(
+                query['id'],
+                "⚠️ Search session expired. Please start a new search with /search",
+                show_alert=True
+            )
+            return
+
+        query_string = search_state['query_string']
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found")
+                return
+
+            user_id_db = user['id']
+
+            # Execute search for requested page
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                query_string,
+                page=page,
+                results_per_page=10
+            )
+
+            # Update search state
+            bot.set_search_state(user_id, {
+                'query_string': query_string,
+                'current_page': page
+            })
+
+            # Format results
+            card = format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=query_string
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=query_string,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            # Update message
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card,
+                reply_markup=keyboard
+            )
+
+            await bot.answer_callback_query(query['id'], f"📄 Page {page}")
+            logger.info(f"Showed search page {page} to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_search_page: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], "❌ Error loading page", show_alert=True)
+
+
+async def callback_search_new(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_new callback to start a new search.
+
+    Shows search help to prompt user to enter a new query.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    from .cards import format_search_help_card
+
+    help_text = format_search_help_card()
+    help_text += "\n\n💡 Type /search <your query> to start a new search"
+
+    keyboard = {
+        'inline_keyboard': [[
+            {'text': '🔍 Try Example Search', 'callback_data': 'search_example'}
+        ]]
+    }
+
+    await bot.edit_message_text(
+        chat_id,
+        message_id,
+        help_text,
+        reply_markup=keyboard
+    )
+
+    await bot.answer_callback_query(query['id'], "Type /search <query> to start new search")
+    logger.info(f"User {user_id} requested new search")
+
+
+async def callback_search_help(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_help callback to show search syntax help.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    from .cards import format_search_help_card
+
+    help_text = format_search_help_card()
+
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '🔍 Try Example Search', 'callback_data': 'search_example'}],
+            [{'text': '🔙 Back to Results', 'callback_data': 'search_back'}]
+        ]
+    }
+
+    await bot.edit_message_text(
+        chat_id,
+        message_id,
+        help_text,
+        reply_markup=keyboard
+    )
+
+    await bot.answer_callback_query(query['id'], "Search help")
+    logger.info(f"Showed search help to user {user_id}")
+
+
+async def callback_search_example(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_example callback to run an example search.
+
+    Demonstrates search functionality with a sample query.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    # Example search query - searches for messages from last 30 days
+    from datetime import date, timedelta
+    date_from = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+    example_query = f"from:{date_from}"
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found")
+                return
+
+            user_id_db = user['id']
+
+            # Execute example search
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                example_query,
+                page=1,
+                results_per_page=10
+            )
+
+            # Store search state
+            bot.set_search_state(user_id, {
+                'query_string': example_query,
+                'current_page': 1
+            })
+
+            # Format results
+            card = "🔍 **Example Search**\n"
+            card += f"Query: `{example_query}`\n"
+            card += "(Messages from last 30 days)\n\n"
+            card += format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=example_query
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=example_query,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card,
+                reply_markup=keyboard
+            )
+
+            await bot.answer_callback_query(query['id'], "Running example search...")
+            logger.info(f"Ran example search for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_search_example: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], "❌ Error running example", show_alert=True)
+
+
+async def callback_search_back(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_back callback to return to previous search results.
+
+    Restores the last search results page.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    # Get search state
+    search_state = bot.get_search_state(user_id)
+    if not search_state or 'query_string' not in search_state:
+        await bot.answer_callback_query(
+            query['id'],
+            "⚠️ No previous search found. Use /search to start a new search",
+            show_alert=True
+        )
+        return
+
+    query_string = search_state['query_string']
+    page = search_state.get('current_page', 1)
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found")
+                return
+
+            user_id_db = user['id']
+
+            # Re-execute search
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                query_string,
+                page=page,
+                results_per_page=10
+            )
+
+            # Format results
+            card = format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=query_string
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=query_string,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card,
+                reply_markup=keyboard
+            )
+
+            await bot.answer_callback_query(query['id'], "Back to search results")
+            logger.info(f"Restored search results for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_search_back: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], "❌ Error restoring results", show_alert=True)
+
+
+# =============================================================================
 # Handler Registration
 # =============================================================================
 
@@ -3695,6 +4148,10 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_command_handler('/servers', cmd_servers)
     bot.register_command_handler('/channels', cmd_channels)
     bot.register_command_handler('/bulk_allow', cmd_bulk_allow)
+
+    # Search command handlers
+    bot.register_command_handler('/search', cmd_search)
+    bot.register_command_handler('/search_help', cmd_search_help)
 
     # Callback handlers
     bot.register_callback_handler('reply_', callback_reply)
@@ -3735,6 +4192,13 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_callback_handler('bulk_toggle_', callback_bulk_toggle_channel)
     bot.register_callback_handler('bulk_confirm_', callback_bulk_confirm)
     bot.register_callback_handler('bulk_cancel', callback_bulk_cancel)
+
+    # Search callbacks
+    bot.register_callback_handler('search_page_', callback_search_page)
+    bot.register_callback_handler('search_new', callback_search_new)
+    bot.register_callback_handler('search_help', callback_search_help)
+    bot.register_callback_handler('search_example', callback_search_example)
+    bot.register_callback_handler('search_back', callback_search_back)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

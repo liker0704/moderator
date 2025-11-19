@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.0.4] - 2025-11-19
+
+### Added
+- Search functionality with full-text search through message history
+- Multiple search filters: author, channel, text, date range
+- Pagination of search results (10 results per page)
+- UI for displaying and navigating search results
+- New commands: /search, /search_help
+- Database indexes for search performance optimization
+- SearchDAO for message retrieval with filters
+- Search service with filter validation
+
+### Changed
+- Enhanced message cards with search context
+- Updated help system to include search documentation
+
+### Technical
+- New DAO: SearchDAO for query building
+- New service: SearchService for business logic
+- Database migration: Indexes on messages table (author, channel_id, created_at, content)
+- 942 lines of new code
+- Integration with existing pagination system
+
+---
+
 ## [v1.0.3] - 2025-11-19
 
 ### Added

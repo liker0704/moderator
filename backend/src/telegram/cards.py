@@ -1065,6 +1065,187 @@ def create_simple_card(
 
 
 # =============================================================================
+# Search Result Formatting Functions
+# =============================================================================
+
+def format_search_results(
+    results: List[Dict[str, Any]],
+    page: int,
+    total_results: int,
+    total_pages: int,
+    filters: Dict[str, Any],
+    query_string: str
+) -> str:
+    """
+    Format search results for Telegram display.
+
+    Args:
+        results: List of message dictionaries from search
+        page: Current page number
+        total_results: Total number of matching messages
+        total_pages: Total number of pages
+        filters: Parsed filter dictionary
+        query_string: Original search query string
+
+    Returns:
+        Formatted search results card
+
+    Example:
+        >>> results = [
+        ...     {'author_name': 'john', 'content': 'Hello world', 'created_at': datetime.now()},
+        ...     {'author_name': 'alice', 'content': 'Hi there', 'created_at': datetime.now()}
+        ... ]
+        >>> card = format_search_results(
+        ...     results, page=1, total_results=25, total_pages=3,
+        ...     filters={'text_query': 'hello'}, query_string='hello'
+        ... )
+    """
+    from ..services.search import SearchService
+
+    # Header
+    card = f"🔍 Search Results\n"
+    card += f"Query: \"{query_string}\"\n"
+    card += f"\n📊 Page {page}/{total_pages} • Total: {total_results} message{'s' if total_results != 1 else ''}\n"
+
+    # Show active filters
+    if filters:
+        filters_summary = SearchService.format_filters_summary(filters)
+        card += f"\n📌 Filters:\n{filters_summary}\n"
+
+    # Show results
+    if not results:
+        card += "\n❌ No messages found matching your search.\n"
+        card += "\n💡 Try:\n"
+        card += "• Using different search terms\n"
+        card += "• Removing some filters\n"
+        card += "• Checking date ranges\n"
+        card += "\nUse /search_help for syntax help."
+    else:
+        card += "\n📝 Results:\n"
+
+        for idx, msg in enumerate(results, 1):
+            # Format timestamp
+            timestamp = msg.get('created_at') or msg.get('platform_created_at')
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                except:
+                    timestamp = None
+
+            if timestamp:
+                time_str = timestamp.strftime('%Y-%m-%d %H:%M')
+            else:
+                time_str = "Unknown date"
+
+            # Platform emoji
+            platform_emoji = "💬" if msg.get('platform') == 'telegram' else "📝"
+
+            # Author
+            author = msg.get('author_name', 'Unknown')
+
+            # Content preview with highlighting
+            content = msg.get('content', '[No content]')
+            text_query = filters.get('text_query')
+            content_preview = SearchService.highlight_text(content, text_query, max_length=100)
+
+            # Channel info
+            channel_id = msg.get('channel_id', '')
+            channel_short = str(channel_id)[:8] if channel_id else 'unknown'
+
+            # Build result entry
+            card += f"\n{idx}. {platform_emoji} {author} • {time_str}\n"
+            card += f"   Channel: {channel_short}... • ID: {msg['id']}\n"
+            card += f"   {content_preview}\n"
+
+        # Add footer
+        card += f"\n💡 Use pagination buttons below to navigate"
+        card += f"\n🔍 Use /search_help for syntax help"
+
+    # Truncate if too long
+    if len(card) > MAX_MESSAGE_LENGTH - 100:
+        card = card[:MAX_MESSAGE_LENGTH - 200] + "\n\n[Results truncated...]"
+
+    return card
+
+
+def create_search_keyboard(
+    query_string: str,
+    page: int,
+    total_pages: int,
+    has_prev: bool,
+    has_next: bool
+) -> dict:
+    """
+    Create pagination keyboard for search results.
+
+    Args:
+        query_string: Original search query (encoded in callback data)
+        page: Current page number
+        total_pages: Total number of pages
+        has_prev: Whether previous page exists
+        has_next: Whether next page exists
+
+    Returns:
+        Telegram inline keyboard dict
+
+    Example:
+        >>> keyboard = create_search_keyboard(
+        ...     query_string="hello author:john",
+        ...     page=2,
+        ...     total_pages=5,
+        ...     has_prev=True,
+        ...     has_next=True
+        ... )
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Pagination row
+    pagination_row = []
+
+    if has_prev:
+        prev_page = page - 1
+        pagination_row.append({
+            'text': '◀️ Previous',
+            'callback_data': f'search_page_{prev_page}'
+        })
+
+    # Page indicator (non-clickable)
+    pagination_row.append({
+        'text': f'📄 {page}/{total_pages}',
+        'callback_data': 'noop'
+    })
+
+    if has_next:
+        next_page = page + 1
+        pagination_row.append({
+            'text': 'Next ▶️',
+            'callback_data': f'search_page_{next_page}'
+        })
+
+    keyboard['inline_keyboard'].append(pagination_row)
+
+    # Action row
+    action_row = [
+        {'text': '🔍 New Search', 'callback_data': 'search_new'},
+        {'text': '❓ Help', 'callback_data': 'search_help'}
+    ]
+    keyboard['inline_keyboard'].append(action_row)
+
+    return keyboard
+
+
+def format_search_help_card() -> str:
+    """
+    Format help card for search syntax.
+
+    Returns:
+        Formatted help card string
+    """
+    from ..services.search import SearchService
+    return SearchService.get_search_help_text()
+
+
+# =============================================================================
 # Example Usage (for testing)
 # =============================================================================
 

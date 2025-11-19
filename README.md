@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: v1.0.3
-**Status**: v1.0 Iteration 3 - Multi-Server Support Complete ✅
+**Version**: v1.0.4
+**Status**: v1.0 Iteration 4 - Search Functionality Complete ✅
 **Last Updated**: November 19, 2025
 
 ---
@@ -128,10 +128,20 @@ This system is designed for a **single moderator** (single-user system).
 - 2 new DAOs: ServerDAO, ChannelDAO
 - 3 new services: DiscordAPIClient, DiscordCacheService, MultiServerService
 
+### v1.0 New Features (Iteration 4)
+
+**✅ Search Functionality** (2025-11-19)
+- Full-text search through message history
+- Multiple filters: author, channel, text, date range
+- Pagination of search results (10 results per page)
+- UI for displaying and navigating search results
+- New commands: /search, /search_help
+- Database indexes for search performance
+- 942 lines of new code
+
 ### Planned Features
 
 **v1.0** (Remaining)
-- Search through history
 - Basic metrics and analytics
 - Quick reply templates
 
@@ -633,6 +643,13 @@ The **[Edit]** button is available for replies sent within the last 48 hours.
 | `/channels {server_id}` | View channels in a server |
 | `/bulk_allow {server_id}` | Add multiple channels to allowlist |
 
+#### Search Functionality (v1.0 Iteration 4)
+
+| Command | Description |
+|---------|-------------|
+| `/search` | Search messages with filters (text, author, channel, date range) |
+| `/search_help` | Show search help and usage examples |
+
 ### Common Workflows
 
 #### Workflow 1: Respond to a Discord Message
@@ -702,6 +719,31 @@ Or set up automatic schedule:
 # View updated settings
 /settings
 → Shows new channels and server information
+```
+
+#### Workflow 6: Search Message History (v1.0 Iteration 4)
+
+```
+# Start search
+/search
+
+# Enter search parameters:
+→ Text to search: "urgent"
+→ Author (optional): @username
+→ Channel (optional): #general
+→ Date range (optional): 2025-11-01 to 2025-11-19
+
+# Results displayed in pages:
+→ Showing 1-10 of 47 results
+→ [Prev] [1] [2] [3] [4] [5] [Next]
+
+# View full message:
+→ Click on result to see context and history
+→ Can reply or edit directly from search results
+
+# Get help:
+/search_help
+→ Shows search syntax, examples, and tips
 ```
 
 📖 For detailed usage instructions, see [docs/USER_GUIDE.md](docs/USER_GUIDE.md)
