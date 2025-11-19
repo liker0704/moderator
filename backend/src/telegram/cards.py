@@ -78,7 +78,7 @@ def format_variants_section(variants: List[Dict]) -> str:
     return section
 
 
-def format_card(message: dict, context_messages: list, variants: Optional[List[Dict]] = None) -> str:
+def format_card(message: dict, context_messages: list, variants: Optional[List[Dict]] = None, server_name: Optional[str] = None) -> str:
     """
     Format a message card for Telegram display.
 
@@ -94,6 +94,7 @@ def format_card(message: dict, context_messages: list, variants: Optional[List[D
             - has_image: Boolean
         context_messages: List of previous messages (same format)
         variants: Optional list of AI variant dicts
+        server_name: Optional server name to display (if None, falls back to truncated server_id)
 
     Returns:
         Formatted card text string
@@ -106,9 +107,12 @@ def format_card(message: dict, context_messages: list, variants: Optional[List[D
 
     # Add server name for Discord (if available)
     if message.get('server_id'):
-        # TODO: Get server name from Discord or cache
-        server_id = str(message['server_id'])
-        header_parts.append(f"Server:{server_id[:8]}...")
+        # Use server name if provided, otherwise fall back to truncated server_id
+        if server_name:
+            header_parts.append(server_name)
+        else:
+            server_id = str(message['server_id'])
+            header_parts.append(f"Server:{server_id[:8]}...")
 
     # Add channel
     channel_id = message.get('channel_id')
@@ -351,6 +355,169 @@ def _truncate_text(text: str, max_length: int) -> str:
     return text[:max_length - 3] + "..."
 
 
+def format_server_list_card(servers: List[Dict], allowlist_stats: Dict) -> str:
+    """
+    Format a list of Discord servers with allowlist statistics.
+
+    Args:
+        servers: List of server dicts with keys:
+            - id: Server ID
+            - name: Server name
+            - icon: Server icon URL (optional)
+        allowlist_stats: Dict mapping server_id -> count of allowed channels
+
+    Returns:
+        Formatted server list card
+
+    Example:
+        >>> servers = [
+        ...     {'id': '123', 'name': 'My Server'},
+        ...     {'id': '456', 'name': 'Test Server'}
+        ... ]
+        >>> stats = {'123': 5, '456': 0}
+        >>> card = format_server_list_card(servers, stats)
+    """
+    if not servers:
+        return "🌐 Your Discord Servers\n\nNo servers found.\n\nPlease check your Discord connection."
+
+    card = "🌐 Your Discord Servers\n"
+
+    total_servers = len(servers)
+    total_allowed = 0
+
+    for server in servers:
+        server_id = str(server.get('id', ''))
+        server_name = server.get('name', 'Unknown Server')
+        allowed_count = allowlist_stats.get(server_id, 0)
+        total_allowed += allowed_count
+
+        # Truncate long server names
+        if len(server_name) > 40:
+            server_name = server_name[:37] + "..."
+
+        # Format with emoji and count
+        card += f"\n🔷 {server_name} - {allowed_count} channel{'s' if allowed_count != 1 else ''} allowed"
+
+    # Add summary footer
+    card += f"\n\n📊 Total: {total_servers} server{'s' if total_servers != 1 else ''}, {total_allowed} channel{'s' if total_allowed != 1 else ''} allowed"
+
+    return card
+
+
+def format_channel_list_card(server: Dict, channels: List[Dict], allowlist: List[str]) -> str:
+    """
+    Format a list of channels in a server with allowlist status.
+
+    Args:
+        server: Server dict with keys:
+            - id: Server ID
+            - name: Server name
+        channels: List of channel dicts with keys:
+            - id: Channel ID
+            - name: Channel name
+            - type: Channel type (0=text, 2=voice, 4=category, 5=announcement, 10-12=thread variants)
+            - parent_id: Parent category ID (optional)
+        allowlist: List of channel IDs that are currently allowed
+
+    Returns:
+        Formatted channel list card
+
+    Example:
+        >>> server = {'id': '123', 'name': 'My Server'}
+        >>> channels = [
+        ...     {'id': '1', 'name': 'general', 'type': 0},
+        ...     {'id': '2', 'name': 'random', 'type': 0}
+        ... ]
+        >>> allowlist = ['1']
+        >>> card = format_channel_list_card(server, channels, allowlist)
+    """
+    server_name = server.get('name', 'Unknown Server')
+    if len(server_name) > 50:
+        server_name = server_name[:47] + "..."
+
+    card = f"📡 Channels in \"{server_name}\"\n"
+
+    if not channels:
+        return card + "\nNo channels found in this server."
+
+    # Channel type mapping
+    type_emojis = {
+        0: '📝',   # Text channel
+        2: '🔊',   # Voice channel
+        4: '📁',   # Category
+        5: '📢',   # Announcement channel
+        10: '🧵',  # Announcement thread
+        11: '🧵',  # Public thread
+        12: '🧵',  # Private thread
+        13: '🎤',  # Stage channel
+        15: '🗂️',  # Forum channel
+    }
+
+    type_labels = {
+        0: 'Text Channels',
+        2: 'Voice Channels',
+        5: 'Announcement Channels',
+        10: 'Threads',
+        11: 'Threads',
+        12: 'Threads',
+        13: 'Stage Channels',
+        15: 'Forum Channels',
+    }
+
+    # Group channels by type (exclude categories)
+    channels_by_type = {}
+    for channel in channels:
+        channel_type = channel.get('type', 0)
+        if channel_type == 4:  # Skip categories
+            continue
+
+        # Normalize thread types
+        if channel_type in [10, 11, 12]:
+            channel_type = 11  # Group all threads together
+
+        if channel_type not in channels_by_type:
+            channels_by_type[channel_type] = []
+
+        channels_by_type[channel_type].append(channel)
+
+    # Format channels by type
+    total_channels = 0
+    total_allowed = 0
+
+    for channel_type in sorted(channels_by_type.keys()):
+        type_label = type_labels.get(channel_type, 'Other Channels')
+        type_emoji = type_emojis.get(channel_type, '📝')
+
+        card += f"\n{type_emoji} {type_label}:\n"
+
+        for channel in channels_by_type[channel_type]:
+            channel_id = str(channel.get('id', ''))
+            channel_name = channel.get('name', 'unknown')
+
+            # Check if channel is in allowlist
+            is_allowed = channel_id in allowlist
+            status_emoji = "✅" if is_allowed else "❌"
+            status_text = "allowed" if is_allowed else "not allowed"
+
+            # Truncate long channel names
+            if len(channel_name) > 35:
+                channel_name = channel_name[:32] + "..."
+
+            # Add # prefix for text channels
+            prefix = "#" if channel_type in [0, 5] else ""
+
+            card += f"{status_emoji} {prefix}{channel_name} ({status_text})\n"
+
+            total_channels += 1
+            if is_allowed:
+                total_allowed += 1
+
+    # Add summary footer
+    card += f"\n📊 Total: {total_channels} channel{'s' if total_channels != 1 else ''} ({total_allowed} allowed)"
+
+    return card
+
+
 # =============================================================================
 # Keyboard Creation Functions
 # =============================================================================
@@ -556,6 +723,137 @@ def create_pagination_keyboard(
     ])
 
     return {'inline_keyboard': keyboard}
+
+
+def create_server_list_keyboard(servers: List[Dict]) -> dict:
+    """
+    Create inline keyboard for Discord server selection.
+
+    Args:
+        servers: List of server dicts with keys:
+            - id: Server ID
+            - name: Server name
+
+    Returns:
+        Telegram inline keyboard dict with server selection buttons
+
+    Example:
+        >>> servers = [
+        ...     {'id': '123', 'name': 'My Server'},
+        ...     {'id': '456', 'name': 'Test Server'}
+        ... ]
+        >>> keyboard = create_server_list_keyboard(servers)
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Add one button per server (each on its own row)
+    for server in servers:
+        server_id = str(server.get('id', ''))
+        server_name = server.get('name', 'Unknown Server')
+
+        # Truncate server name to fit in button (max ~40 chars for readability)
+        if len(server_name) > 35:
+            server_name = server_name[:32] + "..."
+
+        keyboard['inline_keyboard'].append([
+            {'text': f'🔷 {server_name}', 'callback_data': f'server_select_{server_id}'}
+        ])
+
+    # Add refresh button at bottom
+    keyboard['inline_keyboard'].append([
+        {'text': '🔄 Refresh Cache', 'callback_data': 'refresh_server_cache'}
+    ])
+
+    return keyboard
+
+
+def create_channel_list_keyboard(
+    server_id: str,
+    channels: List[Dict],
+    selected: List[str],
+    allowlist: List[str]
+) -> dict:
+    """
+    Create inline keyboard for channel selection and allowlist management.
+
+    Args:
+        server_id: Server ID
+        channels: List of channel dicts with keys:
+            - id: Channel ID
+            - name: Channel name
+            - type: Channel type
+        selected: List of currently selected channel IDs (for multi-select UI)
+        allowlist: List of channel IDs currently in allowlist
+
+    Returns:
+        Telegram inline keyboard dict with channel toggle buttons
+
+    Features:
+        - Shows ✅/❌ based on current allowlist status
+        - Shows ☑️/☐ for multi-select state
+        - Handles pagination if > 15 channels
+        - Includes action buttons: Select All, Save, Cancel
+
+    Example:
+        >>> channels = [
+        ...     {'id': '1', 'name': 'general', 'type': 0},
+        ...     {'id': '2', 'name': 'random', 'type': 0}
+        ... ]
+        >>> keyboard = create_channel_list_keyboard('123', channels, ['1'], ['1'])
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Limit to 15 channels per page to avoid keyboard size limits
+    MAX_CHANNELS_PER_PAGE = 15
+    display_channels = channels[:MAX_CHANNELS_PER_PAGE]
+
+    # Add channel toggle buttons
+    for channel in display_channels:
+        channel_id = str(channel.get('id', ''))
+        channel_name = channel.get('name', 'unknown')
+        channel_type = channel.get('type', 0)
+
+        # Determine status emoji (allowlist status)
+        is_allowed = channel_id in allowlist
+        status_emoji = "✅" if is_allowed else "❌"
+
+        # Determine selection emoji (current selection state)
+        is_selected = channel_id in selected
+        select_emoji = "☑️" if is_selected else "☐"
+
+        # Add # prefix for text channels
+        prefix = "#" if channel_type in [0, 5] else ""
+
+        # Truncate channel name to fit in button
+        if len(channel_name) > 25:
+            channel_name = channel_name[:22] + "..."
+
+        button_text = f"{status_emoji} {select_emoji} {prefix}{channel_name}"
+
+        keyboard['inline_keyboard'].append([
+            {'text': button_text, 'callback_data': f'channel_toggle_{channel_id}'}
+        ])
+
+    # Add pagination info if there are more channels
+    if len(channels) > MAX_CHANNELS_PER_PAGE:
+        remaining = len(channels) - MAX_CHANNELS_PER_PAGE
+        keyboard['inline_keyboard'].append([
+            {'text': f'⚠️ Showing first {MAX_CHANNELS_PER_PAGE} of {len(channels)} channels', 'callback_data': 'noop'}
+        ])
+
+    # Add action buttons row
+    action_row = [
+        {'text': '☑️ Select All', 'callback_data': f'channel_select_all_{server_id}'},
+        {'text': '💾 Save', 'callback_data': f'channel_save_{server_id}'}
+    ]
+    keyboard['inline_keyboard'].append(action_row)
+
+    # Add cancel button
+    keyboard['inline_keyboard'].append([
+        {'text': '❌ Cancel', 'callback_data': 'channel_cancel'}
+    ])
+
+    return keyboard
 
 
 # =============================================================================

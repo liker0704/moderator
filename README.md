@@ -2,9 +2,9 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: v1.0.2
-**Status**: v1.0 Iteration 2 - Edit Feature Complete ✅
-**Last Updated**: November 18, 2025
+**Version**: v1.0.3
+**Status**: v1.0 Iteration 3 - Multi-Server Support Complete ✅
+**Last Updated**: November 19, 2025
 
 ---
 
@@ -116,10 +116,21 @@ This system is designed for a **single moderator** (single-user system).
 - 5 new callback handlers for edit workflow
 - 4 database indexes for edit query optimization
 
+### v1.0 New Features (Iteration 3)
+
+**✅ Multi-Server Support** (2025-11-19)
+- Discord server/channel browsing and discovery
+- Server cache for Discord metadata (discord_servers, discord_channels tables)
+- Bulk allowlist operations (add/remove multiple channels)
+- Enhanced settings with server management section
+- 3 new commands: /servers, /channels, /bulk_allow
+- 10 new callback handlers for server/channel management
+- 2 new DAOs: ServerDAO, ChannelDAO
+- 3 new services: DiscordAPIClient, DiscordCacheService, MultiServerService
+
 ### Planned Features
 
 **v1.0** (Remaining)
-- Multi-server support
 - Search through history
 - Basic metrics and analytics
 - Quick reply templates
@@ -614,6 +625,14 @@ The **[Edit]** button is available for replies sent within the last 48 hours.
 | `/unallow_channel {channel_id}` | Remove channel from allowlist |
 | `/settings` | View current settings and allowlist |
 
+#### Multi-Server Support (v1.0 Iteration 3)
+
+| Command | Description |
+|---------|-------------|
+| `/servers` | Browse and select Discord servers |
+| `/channels {server_id}` | View channels in a server |
+| `/bulk_allow {server_id}` | Add multiple channels to allowlist |
+
 ### Common Workflows
 
 #### Workflow 1: Respond to a Discord Message
@@ -664,6 +683,25 @@ Or set up automatic schedule:
 /allow_channel 111111111111111111 222222222222222222
 
 # Start receiving messages from that channel
+```
+
+#### Workflow 5: Browse Servers and Add Multiple Channels (v1.0 Iteration 3)
+
+```
+# List all connected Discord servers
+/servers
+
+# View channels in a server
+/channels 123456789
+
+# Bulk add multiple channels from a server
+/bulk_allow 123456789
+→ Select channels: #general, #updates, #alerts
+→ All 3 channels added to allowlist
+
+# View updated settings
+/settings
+→ Shows new channels and server information
 ```
 
 📖 For detailed usage instructions, see [docs/USER_GUIDE.md](docs/USER_GUIDE.md)

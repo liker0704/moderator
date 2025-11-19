@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.0.3] - 2025-11-19
+
+### Added
+- Multi-server support with Discord server/channel browsing
+- Server cache (discord_servers and discord_channels tables)
+- Bulk allowlist operations (add/remove multiple channels)
+- New commands: /servers, /channels, /bulk_allow
+- Enhanced settings with server management section
+- Discord REST API client for metadata fetching
+- 10 new callback handlers for server/channel management
+
+### Changed
+- Enhanced message cards to show server names instead of IDs
+- Updated AllowlistDAO with bulk operations
+- Extended settings command with server statistics
+
+### Technical
+- New DAOs: ServerDAO, ChannelDAO
+- New services: DiscordAPIClient, DiscordCacheService, MultiServerService
+- Database migration 005: server and channel caching
+- 2,500+ lines of new code
+- 30+ integration tests
+
+---
+
 ## [v1.0.2] - 2025-11-18
 
 ### Added
