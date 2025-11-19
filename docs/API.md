@@ -1003,30 +1003,346 @@ POST /webhook/telegram
 
 ---
 
-## Мониторинг API
+## Monitoring API (v1.0+)
 
-### Health Check
+### Health Check API (v1.0.1+)
+
+Production-ready health check endpoint for monitoring service health, load balancers, and uptime monitoring.
+
+#### Endpoint
 
 ```
 GET /health
+```
 
-Response:
+#### Response Format
+
+**Success (200 OK)**:
+```json
 {
-  "status": "ok",
-  "discord": "connected",
-  "database": "ok",
-  "timestamp": "2025-11-16T12:00:00Z"
+  "status": "healthy",
+  "timestamp": "2025-11-19T12:00:00.123456Z",
+  "checks": {
+    "discord": {
+      "status": "healthy",
+      "connected": true,
+      "session_id": "abc12345..."
+    },
+    "database": {
+      "status": "healthy",
+      "response_time_ms": 12.34
+    },
+    "redis": {
+      "status": "healthy",
+      "response_time_ms": 5.67
+    },
+    "llm": {
+      "status": "configured",
+      "provider": "openai",
+      "model": "gpt-4-turbo"
+    }
+  },
+  "version": "1.0.0"
 }
 ```
 
-### Metrics (опционально, v1.0+)
+**Degraded (200 OK)** - Critical services OK, optional services down:
+```json
+{
+  "status": "degraded",
+  "timestamp": "2025-11-19T12:00:00.123456Z",
+  "checks": {
+    "discord": {
+      "status": "healthy",
+      "connected": true
+    },
+    "database": {
+      "status": "healthy",
+      "response_time_ms": 15.23
+    },
+    "redis": {
+      "status": "healthy",
+      "response_time_ms": 8.45
+    },
+    "llm": {
+      "status": "unhealthy",
+      "error": "Connection timeout"
+    }
+  },
+  "version": "1.0.0"
+}
+```
+
+**Unhealthy (503 Service Unavailable)** - Critical service down:
+```json
+{
+  "status": "unhealthy",
+  "timestamp": "2025-11-19T12:00:00.123456Z",
+  "checks": {
+    "discord": {
+      "status": "unhealthy",
+      "connected": false,
+      "error": "WebSocket disconnected"
+    },
+    "database": {
+      "status": "unhealthy",
+      "error": "Connection refused"
+    },
+    "redis": {
+      "status": "not_configured"
+    },
+    "llm": {
+      "status": "not_configured"
+    }
+  },
+  "version": "1.0.0"
+}
+```
+
+#### Status Logic
+
+- **healthy**: All critical services operational
+- **degraded**: Critical services OK, optional services (LLM) down
+- **unhealthy**: Any critical service (Discord if configured, Database, Redis if configured) down
+
+#### Service Check Details
+
+**Discord**:
+- `status`: healthy | unhealthy | not_configured
+- `connected`: boolean (connection state)
+- `session_id`: string (Gateway session ID, if connected)
+- `error`: string (error message, if unhealthy)
+
+**Database**:
+- `status`: healthy | unhealthy
+- `response_time_ms`: float (query response time in milliseconds)
+- `error`: string (error message, if unhealthy)
+
+**Redis**:
+- `status`: healthy | unhealthy | not_configured
+- `response_time_ms`: float (ping response time, if configured)
+- `error`: string (error message, if unhealthy)
+
+**LLM**:
+- `status`: configured | not_configured | unhealthy
+- `provider`: string (openai | anthropic, if configured)
+- `model`: string (model name, if configured)
+- `error`: string (error message, if unhealthy)
+
+#### Use Cases
+
+1. **Load Balancer Health Checks**: Returns 200 for healthy/degraded, 503 for unhealthy
+2. **Uptime Monitoring**: Parse `status` field for alerts
+3. **Service Discovery**: Check individual service statuses
+4. **Performance Monitoring**: Track `response_time_ms` metrics
+
+#### Configuration
+
+```bash
+# Health check server runs on port 8000 by default
+HEALTH_CHECK_PORT=8000
+```
+
+---
+
+### Prometheus Metrics API (v1.0.8+)
+
+Comprehensive Prometheus-compatible metrics endpoint for monitoring, alerting, and observability.
+
+#### Endpoint
 
 ```
 GET /metrics
+```
 
-Response (Prometheus format):
+#### Response Format
+
+Plain text in Prometheus exposition format:
+
+```
+# HELP moderator_tasks_total Total tasks by status
+# TYPE moderator_tasks_total counter
 moderator_tasks_total{status="open"} 12
 moderator_tasks_total{status="answered"} 235
-moderator_messages_processed_total{platform="discord"} 1523
-moderator_messages_processed_total{platform="telegram"} 89
+moderator_tasks_total{status="muted"} 8
+
+# HELP moderator_messages_received_total Total messages received by platform
+# TYPE moderator_messages_received_total counter
+moderator_messages_received_total{platform="discord"} 1523
+moderator_messages_received_total{platform="telegram"} 89
+
+# HELP moderator_replies_sent_total Total replies sent by platform
+# TYPE moderator_replies_sent_total counter
+moderator_replies_sent_total{platform="discord"} 235
+moderator_replies_sent_total{platform="telegram"} 45
+
+# HELP moderator_errors_total Total errors by type
+# TYPE moderator_errors_total counter
+moderator_errors_total{error_type="discord_post"} 3
+moderator_errors_total{error_type="telegram_post"} 1
+moderator_errors_total{error_type="llm_timeout"} 5
+
+# HELP moderator_open_tasks Current number of open tasks
+# TYPE moderator_open_tasks gauge
+moderator_open_tasks 12
+
+# HELP moderator_active_sessions Current active Discord sessions
+# TYPE moderator_active_sessions gauge
+moderator_active_sessions 1
+
+# HELP moderator_queue_depth Current job queue depth
+# TYPE moderator_queue_depth gauge
+moderator_queue_depth{queue="discord"} 3
+moderator_queue_depth{queue="telegram"} 1
+moderator_queue_depth{queue="llm"} 0
+
+# HELP moderator_response_time_seconds Response time latency
+# TYPE moderator_response_time_seconds histogram
+moderator_response_time_seconds_bucket{le="30"} 45
+moderator_response_time_seconds_bucket{le="60"} 102
+moderator_response_time_seconds_bucket{le="300"} 187
+moderator_response_time_seconds_bucket{le="600"} 210
+moderator_response_time_seconds_bucket{le="+Inf"} 235
+moderator_response_time_seconds_sum 42567.3
+moderator_response_time_seconds_count 235
+
+# HELP moderator_llm_response_time_seconds LLM API response time
+# TYPE moderator_llm_response_time_seconds histogram
+moderator_llm_response_time_seconds_bucket{provider="openai",le="1"} 12
+moderator_llm_response_time_seconds_bucket{provider="openai",le="3"} 38
+moderator_llm_response_time_seconds_bucket{provider="openai",le="5"} 42
+moderator_llm_response_time_seconds_bucket{provider="openai",le="+Inf"} 45
+moderator_llm_response_time_seconds_sum{provider="openai"} 98.7
+moderator_llm_response_time_seconds_count{provider="openai"} 45
+
+# HELP moderator_database_query_duration_seconds Database query duration
+# TYPE moderator_database_query_duration_seconds histogram
+moderator_database_query_duration_seconds_bucket{operation="select",le="0.01"} 1250
+moderator_database_query_duration_seconds_bucket{operation="select",le="0.05"} 1480
+moderator_database_query_duration_seconds_bucket{operation="select",le="0.1"} 1502
+moderator_database_query_duration_seconds_bucket{operation="select",le="+Inf"} 1523
+moderator_database_query_duration_seconds_sum{operation="select"} 23.45
+moderator_database_query_duration_seconds_count{operation="select"} 1523
 ```
+
+#### Metrics Breakdown
+
+**Counters** (monotonically increasing):
+- `moderator_tasks_total{status}` - Total tasks by status (open, answered, muted)
+- `moderator_messages_received_total{platform}` - Messages received (discord, telegram)
+- `moderator_replies_sent_total{platform}` - Replies sent
+- `moderator_errors_total{error_type}` - Errors by type
+
+**Gauges** (point-in-time values):
+- `moderator_open_tasks` - Current open tasks count
+- `moderator_active_sessions` - Active Discord Gateway sessions
+- `moderator_queue_depth{queue}` - Job queue depth by queue name
+
+**Histograms** (distribution of values):
+- `moderator_response_time_seconds` - Response latency distribution
+  - Buckets: 30s, 60s, 300s (5min), 600s (10min), +Inf
+- `moderator_llm_response_time_seconds{provider}` - LLM API latency by provider
+  - Buckets: 1s, 3s, 5s, +Inf
+- `moderator_database_query_duration_seconds{operation}` - DB query duration
+  - Buckets: 0.01s, 0.05s, 0.1s, +Inf
+
+#### Integration Examples
+
+**Prometheus scrape config** (`prometheus.yml`):
+```yaml
+scrape_configs:
+  - job_name: 'moderator'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['localhost:8000']
+```
+
+**Grafana Dashboard Queries**:
+
+1. **Task Completion Rate** (last hour):
+   ```promql
+   rate(moderator_tasks_total{status="answered"}[1h])
+   ```
+
+2. **Average Response Time** (5min window):
+   ```promql
+   rate(moderator_response_time_seconds_sum[5m]) /
+   rate(moderator_response_time_seconds_count[5m])
+   ```
+
+3. **Error Rate** (percentage):
+   ```promql
+   100 * (
+     sum(rate(moderator_errors_total[5m])) /
+     sum(rate(moderator_messages_received_total[5m]))
+   )
+   ```
+
+4. **Current Open Tasks**:
+   ```promql
+   moderator_open_tasks
+   ```
+
+5. **LLM Latency P95**:
+   ```promql
+   histogram_quantile(0.95,
+     rate(moderator_llm_response_time_seconds_bucket[5m])
+   )
+   ```
+
+**Alert Rules** (`alerts.yml`):
+```yaml
+groups:
+  - name: moderator_alerts
+    rules:
+      - alert: HighOpenTasks
+        expr: moderator_open_tasks > 20
+        for: 10m
+        annotations:
+          summary: "Too many open tasks ({{ $value }})"
+
+      - alert: HighErrorRate
+        expr: |
+          100 * (
+            sum(rate(moderator_errors_total[5m])) /
+            sum(rate(moderator_messages_received_total[5m]))
+          ) > 5
+        for: 5m
+        annotations:
+          summary: "Error rate above 5% ({{ $value | humanize }}%)"
+
+      - alert: SlowResponseTime
+        expr: |
+          rate(moderator_response_time_seconds_sum[5m]) /
+          rate(moderator_response_time_seconds_count[5m]) > 300
+        for: 10m
+        annotations:
+          summary: "Average response time > 5 minutes ({{ $value | humanizeDuration }})"
+```
+
+#### Configuration
+
+```bash
+# Enable metrics endpoint (disabled by default for security)
+METRICS_ENABLED=true
+
+# Metrics server port (default: same as HEALTH_CHECK_PORT)
+METRICS_PORT=8000
+
+# Gauge update interval in seconds (default: 60)
+METRICS_UPDATE_INTERVAL=60
+```
+
+#### Security Considerations
+
+1. **Firewall**: Restrict /metrics endpoint to monitoring network only
+2. **Authentication**: Consider adding HTTP basic auth for production
+3. **Rate Limiting**: Prometheus scrapes don't need high frequency (15-30s interval)
+
+#### Performance Impact
+
+- **Memory**: ~2-5 MB for metric storage
+- **CPU**: <1% overhead for metric collection
+- **Network**: ~10-50 KB per scrape (depends on metric count)
+
+---

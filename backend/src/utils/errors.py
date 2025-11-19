@@ -14,6 +14,7 @@ making it easier to debug issues and provide helpful user feedback.
 
 import json
 import uuid
+import re
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -465,3 +466,309 @@ if __name__ == "__main__":
     ]
     for err in critical_errors:
         print(f"🔴 {err.code}: {err.title}")
+
+
+# =============================================================================
+# Error Message Sanitization (v1.0+)
+# =============================================================================
+
+def sanitize_error_message(
+    error_message: str,
+    sanitize_paths: bool = True,
+    sanitize_tokens: bool = True,
+    sanitize_ips: bool = False,
+    sanitize_emails: bool = False,
+    for_user: bool = True,
+) -> str:
+    """
+    Sanitize error messages to prevent information leakage.
+
+    This function removes or redacts sensitive information from error messages
+    before they are shown to users or logged. It helps prevent:
+    - Path disclosure attacks (revealing internal directory structure)
+    - Token/credential leakage
+    - IP address exposure
+    - Email address harvesting
+    - Database schema disclosure
+
+    Args:
+        error_message: Original error message to sanitize
+        sanitize_paths: Remove file system paths (default: True)
+        sanitize_tokens: Remove potential tokens/keys (default: True)
+        sanitize_ips: Remove IP addresses (default: False)
+        sanitize_emails: Remove email addresses (default: False)
+        for_user: If True, use generic messages; if False, keep details for server logs (default: True)
+
+    Returns:
+        Sanitized error message safe for display
+
+    Example:
+        >>> error = "File not found: /home/user/moderator/config.py"
+        >>> sanitize_error_message(error)
+        'File not found: [PATH]'
+
+        >>> error = "Database connection failed to postgresql://user:pass@db:5432/moderator"
+        >>> sanitize_error_message(error)
+        'Database connection failed to [DATABASE]'
+    """
+    if not error_message:
+        return error_message
+
+    sanitized = error_message
+
+    # Remove absolute file paths (common in Python tracebacks)
+    if sanitize_paths:
+        # Unix paths
+        sanitized = re.sub(
+            r'/(?:home|root|usr|var|opt|etc)/[^\s\'"]+',
+            '[PATH]',
+            sanitized
+        )
+        # Windows paths
+        sanitized = re.sub(
+            r'[A-Z]:\\(?:[^\s\'"\\]+\\)*[^\s\'"\\]*',
+            '[PATH]',
+            sanitized
+        )
+        # Relative paths with file extensions
+        sanitized = re.sub(
+            r'(?:\.\.?/)?(?:[a-zA-Z0-9_-]+/)+[a-zA-Z0-9_-]+\.[a-z]{2,5}',
+            '[PATH]',
+            sanitized
+        )
+
+    # Remove database connection strings
+    sanitized = re.sub(
+        r'(?:postgresql|mysql|mongodb)://[^\s\'"]+',
+        '[DATABASE]',
+        sanitized,
+        flags=re.IGNORECASE
+    )
+
+    # Remove tokens and API keys (common patterns)
+    if sanitize_tokens:
+        # Discord tokens (MTA... or NTA...)
+        sanitized = re.sub(
+            r'\b[MN]T[A-Za-z0-9_-]{23}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}\b',
+            '[DISCORD_TOKEN]',
+            sanitized
+        )
+        # Telegram bot tokens (number:alphanumeric)
+        sanitized = re.sub(
+            r'\b\d{8,10}:[A-Za-z0-9_-]{35}\b',
+            '[TELEGRAM_TOKEN]',
+            sanitized
+        )
+        # Generic Bearer tokens
+        sanitized = re.sub(
+            r'Bearer\s+[A-Za-z0-9_-]{20,}',
+            'Bearer [TOKEN]',
+            sanitized,
+            flags=re.IGNORECASE
+        )
+        # API keys (common patterns)
+        sanitized = re.sub(
+            r'\b(?:sk-|pk_|api[_-]?key[_-]?)[A-Za-z0-9_-]{20,}\b',
+            '[API_KEY]',
+            sanitized,
+            flags=re.IGNORECASE
+        )
+        # Generic long hex/base64 strings (likely secrets)
+        sanitized = re.sub(
+            r'\b[A-Fa-f0-9]{40,}\b',
+            '[SECRET]',
+            sanitized
+        )
+
+    # Remove IP addresses (both IPv4 and IPv6)
+    if sanitize_ips:
+        # IPv4
+        sanitized = re.sub(
+            r'\b(?:\d{1,3}\.){3}\d{1,3}\b',
+            '[IP]',
+            sanitized
+        )
+        # IPv6
+        sanitized = re.sub(
+            r'\b(?:[A-Fa-f0-9]{1,4}:){7}[A-Fa-f0-9]{1,4}\b',
+            '[IP]',
+            sanitized
+        )
+
+    # Remove email addresses
+    if sanitize_emails:
+        sanitized = re.sub(
+            r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
+            '[EMAIL]',
+            sanitized
+        )
+
+    # If this is for user display, apply additional generic replacements
+    if for_user:
+        # Generic database error patterns
+        sanitized = re.sub(
+            r'(?:table|column|constraint|index|database)\s+[\'"`]?([a-z_]+)[\'"`]?',
+            r'database object',
+            sanitized,
+            flags=re.IGNORECASE
+        )
+
+        # Remove SQL-like syntax hints
+        sanitized = re.sub(
+            r'\bSELECT\b.*?\bFROM\b.*?(?:WHERE|LIMIT|;)',
+            '[QUERY]',
+            sanitized,
+            flags=re.IGNORECASE
+        )
+
+    return sanitized
+
+
+def get_safe_error_message(
+    error: Exception,
+    default_message: str = "An unexpected error occurred",
+    include_type: bool = False,
+) -> str:
+    """
+    Get a safe, sanitized error message from an exception.
+
+    This function extracts the error message from an exception and sanitizes
+    it for safe display to users. It's the primary function to use when
+    converting exceptions to user-facing messages.
+
+    Args:
+        error: The exception to extract message from
+        default_message: Message to use if error has no useful message
+        include_type: Include exception type name (default: False)
+
+    Returns:
+        Safe error message string
+
+    Example:
+        >>> try:
+        ...     raise FileNotFoundError("/home/user/secret/config.py not found")
+        ... except Exception as e:
+        ...     message = get_safe_error_message(e)
+        >>> print(message)
+        '[PATH] not found'
+    """
+    # Get error message
+    error_msg = str(error) if error else default_message
+
+    # If error message is empty or too generic, use default
+    if not error_msg or error_msg in ('', 'None'):
+        error_msg = default_message
+
+    # Sanitize the message
+    safe_msg = sanitize_error_message(error_msg, for_user=True)
+
+    # Add exception type if requested
+    if include_type:
+        error_type = type(error).__name__
+        safe_msg = f"{error_type}: {safe_msg}"
+
+    return safe_msg
+
+
+def create_safe_error_response(
+    error: Exception,
+    request_id: Optional[str] = None,
+    include_details: bool = False,
+) -> Dict[str, Any]:
+    """
+    Create a safe error response dictionary for API responses.
+
+    This function creates a standardized error response that's safe to send
+    to clients. It includes minimal information by default, with option to
+    include more details for debugging (should only be enabled in development).
+
+    Args:
+        error: The exception that occurred
+        request_id: Optional request ID for tracking
+        include_details: Include detailed error info (dev only, default: False)
+
+    Returns:
+        Dictionary with error information safe for API responses
+
+    Example:
+        >>> try:
+        ...     raise ValueError("Invalid input: /secret/path/file.txt")
+        ... except Exception as e:
+        ...     response = create_safe_error_response(e, request_id="REQ-123")
+        >>> print(response)
+        {
+            'error': True,
+            'message': 'Invalid input: [PATH]',
+            'request_id': 'REQ-123'
+        }
+    """
+    # Generate request ID if not provided
+    if not request_id:
+        request_id = generate_request_id()
+
+    # Build base response
+    response = {
+        'error': True,
+        'message': get_safe_error_message(error),
+        'request_id': request_id,
+    }
+
+    # Add details only if explicitly requested (development mode)
+    if include_details:
+        response['details'] = {
+            'type': type(error).__name__,
+            'original_message': sanitize_error_message(str(error), for_user=False),
+        }
+
+        # Add traceback info if available (sanitized)
+        import traceback
+        tb = traceback.format_exception(type(error), error, error.__traceback__)
+        response['details']['traceback'] = [
+            sanitize_error_message(line, for_user=False)
+            for line in tb
+        ]
+
+    return response
+
+
+def sanitize_log_message(message: str) -> str:
+    """
+    Sanitize log messages for server-side logging.
+
+    Similar to sanitize_error_message but less aggressive - keeps more details
+    for debugging while still removing the most sensitive information.
+
+    Args:
+        message: Log message to sanitize
+
+    Returns:
+        Sanitized log message
+
+    Example:
+        >>> log_msg = "User token: sk-abc123def456 authenticated from 192.168.1.1"
+        >>> sanitize_log_message(log_msg)
+        'User token: [API_KEY] authenticated from 192.168.1.1'
+    """
+    return sanitize_error_message(
+        message,
+        sanitize_paths=False,  # Keep paths for debugging
+        sanitize_tokens=True,  # Remove tokens
+        sanitize_ips=False,    # Keep IPs (useful for security analysis)
+        sanitize_emails=False, # Keep emails
+        for_user=False,        # Keep more details
+    )
+
+
+# Update __all__ to export new functions
+__all__ = [
+    'ErrorSeverity',
+    'ErrorCode',
+    'ErrorCodes',
+    'generate_request_id',
+    'format_error_message',
+    'get_error_codes',
+    'sanitize_error_message',
+    'get_safe_error_message',
+    'create_safe_error_response',
+    'sanitize_log_message',
+]
