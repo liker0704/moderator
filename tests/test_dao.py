@@ -94,6 +94,76 @@ def test_attachment_dao_methods_exist():
     assert callable(AttachmentDAO.get_attachments_for_message)
 
 
+def test_templates_dao_methods_exist():
+    """Test that TemplatesDAO has expected methods"""
+    from database.dao.templates_dao import TemplatesDAO
+
+    assert hasattr(TemplatesDAO, 'create_template')
+    assert hasattr(TemplatesDAO, 'get_templates')
+    assert hasattr(TemplatesDAO, 'get_template_by_id')
+    assert hasattr(TemplatesDAO, 'get_template_by_name')
+    assert hasattr(TemplatesDAO, 'update_template')
+    assert hasattr(TemplatesDAO, 'delete_template')
+    assert hasattr(TemplatesDAO, 'delete_template_by_id')
+    assert hasattr(TemplatesDAO, 'increment_usage')
+    assert hasattr(TemplatesDAO, 'get_template_count')
+    assert hasattr(TemplatesDAO, 'search_templates')
+    assert hasattr(TemplatesDAO, 'substitute_variables')
+    assert hasattr(TemplatesDAO, 'extract_variables')
+    assert callable(TemplatesDAO.create_template)
+    assert callable(TemplatesDAO.get_templates)
+    assert callable(TemplatesDAO.substitute_variables)
+    assert callable(TemplatesDAO.extract_variables)
+
+
+def test_templates_dao_variable_substitution():
+    """Test template variable substitution"""
+    from database.dao.templates_dao import TemplatesDAO
+
+    # Test basic substitution
+    content = "Hello {{author}}! Welcome to {{channel}}."
+    variables = {'author': 'John', 'channel': '#general'}
+    result = TemplatesDAO.substitute_variables(content, variables)
+    assert result == "Hello John! Welcome to #general."
+
+    # Test with missing variable (should leave placeholder)
+    content = "Hello {{author}}! Welcome to {{channel}}."
+    variables = {'author': 'John'}
+    result = TemplatesDAO.substitute_variables(content, variables)
+    assert result == "Hello John! Welcome to {{channel}}."
+
+    # Test with no variables
+    content = "Hello world!"
+    variables = {}
+    result = TemplatesDAO.substitute_variables(content, variables)
+    assert result == "Hello world!"
+
+
+def test_templates_dao_extract_variables():
+    """Test template variable extraction"""
+    from database.dao.templates_dao import TemplatesDAO
+
+    # Test basic extraction
+    content = "Hello {{author}}! Welcome to {{channel}}."
+    variables = TemplatesDAO.extract_variables(content)
+    assert set(variables) == {'author', 'channel'}
+
+    # Test with duplicate variables
+    content = "Hi {{author}}, this is for {{author}}"
+    variables = TemplatesDAO.extract_variables(content)
+    assert variables.count('author') == 2
+
+    # Test with no variables
+    content = "Hello world!"
+    variables = TemplatesDAO.extract_variables(content)
+    assert variables == []
+
+    # Test with complex variables
+    content = "{{date}} - {{time}} from {{author}}"
+    variables = TemplatesDAO.extract_variables(content)
+    assert set(variables) == {'date', 'time', 'author'}
+
+
 def test_audit_dao_methods_exist():
     """Test that AuditDAO has expected methods"""
     from database.dao.audit_dao import AuditDAO

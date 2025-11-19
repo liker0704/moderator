@@ -101,6 +101,15 @@ class RedisConfig:
 
 
 @dataclass
+class MetricsConfig:
+    """Metrics configuration (v1.0+)."""
+
+    enabled: bool = False
+    port: int = 8000  # Same port as health check by default
+    update_interval: int = 60  # Gauge update interval in seconds
+
+
+@dataclass
 class Config:
     """Main application configuration."""
 
@@ -121,6 +130,9 @@ class Config:
 
     # Redis (optional, for v0.2+)
     redis: Optional[RedisConfig] = None
+
+    # Metrics (optional, for v1.0+)
+    metrics: Optional[MetricsConfig] = None
 
     # Logging
     log_level: str = "INFO"
@@ -289,6 +301,19 @@ class Config:
             )
             log_level = "INFO"
 
+        # Metrics configuration (optional, for v1.0+)
+        metrics_config = None
+        metrics_enabled = os.getenv("METRICS_ENABLED", "false").lower() in ["true", "1", "yes"]
+        if metrics_enabled:
+            metrics_port = int(os.getenv("METRICS_PORT", os.getenv("HEALTH_CHECK_PORT", "8000")))
+            metrics_update_interval = int(os.getenv("METRICS_UPDATE_INTERVAL", "60"))
+            metrics_config = MetricsConfig(
+                enabled=True,
+                port=metrics_port,
+                update_interval=metrics_update_interval
+            )
+            print(f"Metrics enabled on port {metrics_port}", file=sys.stderr)
+
         return cls(
             database=database,
             telegram=telegram,
@@ -296,6 +321,7 @@ class Config:
             encryption_key=encryption_key,
             llm=llm_config,
             redis=redis_config,
+            metrics=metrics_config,
             log_level=log_level
         )
 
@@ -327,6 +353,7 @@ __all__ = [
     "DiscordConfig",
     "LLMConfig",
     "RedisConfig",
+    "MetricsConfig",
     "config",
     "get_config"
 ]

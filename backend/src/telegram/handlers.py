@@ -132,12 +132,22 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 /dnd [on|off|schedule] - Toggle or configure DND mode
 /settings - View/edit all settings (with action buttons)
 
+📝 Quick Reply Templates:
+/templates - List all your templates
+/templates add <name> <content> - Create a new template
+/templates delete <name> - Delete a template
+
 🔍 Search & History:
 /search <query> - Search message history with filters
 /search_help - Show search syntax and examples
 
 📊 Statistics & Metrics:
 /stats [7|30|90] - View statistics and metrics (default: 30 days)
+
+📦 Data Export:
+/export - Export all data to JSON
+/export anonymize - Export with anonymization
+/export preview - Show export preview
 
 🖥️ Multi-Server Support:
 /servers - List Discord servers with allowlist stats
@@ -152,6 +162,7 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 When you receive a message card:
 • Click "Ответить" to reply
 • Click "Показать больше" to load more context
+• Click template buttons for quick replies
 • Click "DND" to toggle Do Not Disturb mode
 • After typing reply, confirm before sending
 
@@ -3114,6 +3125,122 @@ async def cmd_stats(message: dict, bot: 'TelegramBot'):
         )
 
 
+async def cmd_export(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /export command.
+
+    Exports all user data to JSON format.
+    Usage:
+    - /export - Export all data
+    - /export anonymize - Export with anonymization
+    - /export preview - Show export preview without exporting
+    """
+    user_id = message['from']['id']
+
+    # Parse command arguments
+    text = message.get('text', '').strip()
+    parts = text.split()
+
+    anonymize = False
+    preview_only = False
+
+    if len(parts) > 1:
+        arg = parts[1].lower()
+        if arg == 'anonymize':
+            anonymize = True
+        elif arg == 'preview':
+            preview_only = True
+        else:
+            await bot.send_message(
+                user_id,
+                "❌ Invalid argument.\n\n"
+                "Usage:\n"
+                "• /export - Export all data\n"
+                "• /export anonymize - Export with anonymization\n"
+                "• /export preview - Show export preview"
+            )
+            return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.export import ExportService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(
+                    user_id,
+                    "❌ User not found. Please use /start to initialize."
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Initialize export service
+            export_service = ExportService()
+
+            # Handle preview request
+            if preview_only:
+                preview = await export_service.get_export_preview(conn, user_id_db)
+                await bot.send_message(user_id, preview)
+                logger.info(f"Showed export preview to user {user_id}")
+                return
+
+            # Send progress message
+            anonymize_text = " (anonymized)" if anonymize else ""
+            status_msg = await bot.send_message(
+                user_id,
+                f"📦 Preparing export{anonymize_text}...\n\nThis may take a moment."
+            )
+
+            # Create export file
+            file_path, filename = await export_service.create_export_file(
+                conn,
+                user_id_db,
+                anonymize=anonymize,
+                include_llm_requests=False  # Optional, can be made configurable
+            )
+
+            # Update status
+            await bot.edit_message_text(
+                user_id,
+                status_msg['message_id'],
+                f"📤 Uploading export file{anonymize_text}..."
+            )
+
+            # Send file
+            caption = f"📦 Data Export{anonymize_text}\n\nGenerated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+
+            try:
+                with open(file_path, 'rb') as f:
+                    await bot.send_document(
+                        chat_id=user_id,
+                        document=f,
+                        filename=filename,
+                        caption=caption
+                    )
+
+                # Delete progress message
+                await bot.delete_message(user_id, status_msg['message_id'])
+
+                logger.info(f"Export sent to user {user_id} (anonymize={anonymize})")
+
+            finally:
+                # Cleanup export file
+                ExportService.cleanup_export_file(file_path)
+
+    except Exception as e:
+        logger.error(f"Error exporting data for user {user_id}: {e}", exc_info=True)
+        await bot.send_message(
+            user_id,
+            f"❌ Error exporting data: {str(e)}\n\nPlease try again later."
+        )
+
+
 # =============================================================================
 # Multi-Server Support Callback Handlers
 # =============================================================================
@@ -4339,6 +4466,372 @@ async def callback_stats_refresh(query: dict, bot: 'TelegramBot'):
 
 
 # =============================================================================
+# Template Management Handlers
+# =============================================================================
+
+async def cmd_templates(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /templates command.
+
+    Usage:
+    - /templates - List all templates
+    - /templates add <name> <content> - Add a new template
+    - /templates delete <name> - Delete a template
+
+    Templates support variable substitution:
+    - {{author}} - Original message author
+    - {{channel}} - Channel name/ID
+    - {{date}} - Current date
+    - {{time}} - Current time
+    """
+    user_id = message['from']['id']
+    text = message.get('text', '')
+    parts = text.split(maxsplit=2)
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..database.dao.templates_dao import TemplatesDAO
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Command: /templates (list all)
+            if len(parts) == 1:
+                templates = await TemplatesDAO.get_templates(conn, user_id_db, order_by='usage_count')
+
+                if not templates:
+                    help_text = """📝 Quick Reply Templates
+
+You don't have any templates yet.
+
+**Create a template:**
+/templates add <name> <content>
+
+**Examples:**
+/templates add greeting Hello {{author}}! How can I help?
+/templates add rules Please read #rules channel
+/templates add closing Thanks for reaching out!
+
+**Variable substitution:**
+• {{author}} - Original message author
+• {{channel}} - Channel name
+• {{date}} - Current date
+• {{time}} - Current time
+
+Use templates directly from message cards!"""
+
+                    await bot.send_message(user_id, help_text)
+                    return
+
+                # Format template list
+                template_list = "📝 Your Quick Reply Templates\n\n"
+
+                for idx, template in enumerate(templates, 1):
+                    name = template['name']
+                    content = template['content']
+                    usage_count = template['usage_count']
+
+                    # Truncate long content
+                    if len(content) > 80:
+                        content = content[:77] + "..."
+
+                    template_list += f"{idx}. **{name}** (used {usage_count}x)\n"
+                    template_list += f"   _{content}_\n\n"
+
+                template_list += """**Commands:**
+/templates add <name> <content> - Add template
+/templates delete <name> - Delete template
+
+**Variables:** {{author}}, {{channel}}, {{date}}, {{time}}"""
+
+                await bot.send_message(user_id, template_list, parse_mode='Markdown')
+                logger.info(f"Sent template list to user {user_id} ({len(templates)} templates)")
+
+            # Command: /templates add <name> <content>
+            elif len(parts) >= 3 and parts[1].lower() == 'add':
+                # Parse name and content from remaining text
+                remaining_text = text.split(maxsplit=2)[2]  # Everything after "/templates add"
+
+                # Split on first space to get name and content
+                try:
+                    name, content = remaining_text.split(maxsplit=1)
+                except ValueError:
+                    await bot.send_message(
+                        user_id,
+                        "❌ Invalid format. Use: /templates add <name> <content>\n\n"
+                        "Example: /templates add greeting Hello {{author}}!"
+                    )
+                    return
+
+                # Validate name (alphanumeric and underscores only)
+                if not name.replace('_', '').isalnum():
+                    await bot.send_message(
+                        user_id,
+                        "❌ Template name must contain only letters, numbers, and underscores."
+                    )
+                    return
+
+                # Check if template with this name already exists
+                existing = await TemplatesDAO.get_template_by_name(conn, user_id_db, name)
+                if existing:
+                    await bot.send_message(
+                        user_id,
+                        f"❌ Template '{name}' already exists.\n\n"
+                        f"Use /templates delete {name} first, or choose a different name."
+                    )
+                    return
+
+                # Create template
+                template_id = await TemplatesDAO.create_template(conn, user_id_db, name, content)
+
+                # Extract variables from content
+                variables = TemplatesDAO.extract_variables(content)
+                var_info = ""
+                if variables:
+                    var_list = ", ".join(f"{{{{{{var}}}}}}" for var in variables)
+                    var_info = f"\n📌 Variables detected: {var_list}"
+
+                await bot.send_message(
+                    user_id,
+                    f"✅ Template '{name}' created successfully!{var_info}\n\n"
+                    f"Content: {content}\n\n"
+                    f"Use it from message card buttons or type its name when replying.",
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Created template '{name}' (ID: {template_id}) for user {user_id}")
+
+            # Command: /templates delete <name>
+            elif len(parts) >= 3 and parts[1].lower() == 'delete':
+                name = parts[2]
+
+                # Check if template exists
+                existing = await TemplatesDAO.get_template_by_name(conn, user_id_db, name)
+                if not existing:
+                    await bot.send_message(
+                        user_id,
+                        f"❌ Template '{name}' not found.\n\n"
+                        f"Use /templates to see your templates."
+                    )
+                    return
+
+                # Delete template
+                deleted = await TemplatesDAO.delete_template(conn, user_id_db, name)
+
+                if deleted:
+                    await bot.send_message(
+                        user_id,
+                        f"✅ Template '{name}' deleted successfully."
+                    )
+                    logger.info(f"Deleted template '{name}' for user {user_id}")
+                else:
+                    await bot.send_message(user_id, "❌ Failed to delete template.")
+                    logger.error(f"Failed to delete template '{name}' for user {user_id}")
+
+            else:
+                # Invalid subcommand
+                await bot.send_message(
+                    user_id,
+                    "❌ Invalid usage.\n\n"
+                    "**Available commands:**\n"
+                    "/templates - List all templates\n"
+                    "/templates add <name> <content> - Add template\n"
+                    "/templates delete <name> - Delete template\n\n"
+                    "Example: /templates add greeting Hello {{author}}!"
+                )
+
+    except Exception as e:
+        logger.error(f"Error in cmd_templates for user {user_id}: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error: {str(e)}")
+
+
+async def callback_use_template(query: dict, bot: 'TelegramBot'):
+    """
+    Handle use_template_{template_id} callback.
+
+    Apply a template to the current reply.
+    """
+    user_id = query['from']['id']
+    message = query['message']
+    chat_id = message['chat']['id']
+    data = query['data']
+
+    # Extract template_id from callback data
+    try:
+        template_id = int(data.split('_')[-1])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.answer_callback_query(query['id'], "❌ Invalid template ID")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.templates_dao import TemplatesDAO
+    from ..database.dao.user_dao import UserDAO
+    from datetime import datetime
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Get template
+            template = await TemplatesDAO.get_template_by_id(conn, template_id)
+            if not template:
+                await bot.answer_callback_query(query['id'], "❌ Template not found", show_alert=True)
+                return
+
+            # Verify template belongs to user
+            if template['user_id'] != user_id_db:
+                await bot.answer_callback_query(query['id'], "❌ Access denied", show_alert=True)
+                return
+
+            # Get task_id from user state or message context
+            state_data = bot.get_user_state(user_id)
+
+            if not state_data:
+                await bot.answer_callback_query(
+                    query['id'],
+                    "❌ No active reply. Click 'Ответить' on a message card first.",
+                    show_alert=True
+                )
+                return
+
+            # Get message context for variable substitution
+            task_id = state_data.get('data', {}).get('task_id')
+            if not task_id:
+                await bot.answer_callback_query(query['id'], "❌ Invalid state", show_alert=True)
+                return
+
+            # Fetch task and message for variable substitution
+            task_query = "SELECT * FROM tasks WHERE id = $1"
+            task_row = await conn.fetchrow(task_query, task_id)
+            if not task_row:
+                await bot.answer_callback_query(query['id'], "❌ Task not found", show_alert=True)
+                return
+            task = dict(task_row)
+
+            message_query = "SELECT * FROM messages WHERE id = $1"
+            message_row = await conn.fetchrow(message_query, task['source_message_id'])
+            if not message_row:
+                await bot.answer_callback_query(query['id'], "❌ Message not found", show_alert=True)
+                return
+            msg_data = dict(message_row)
+
+            # Prepare variable substitution
+            now = datetime.utcnow()
+            variables = {
+                'author': msg_data.get('author_name', 'Unknown'),
+                'channel': msg_data.get('channel_id', 'unknown'),
+                'date': now.strftime('%Y-%m-%d'),
+                'time': now.strftime('%H:%M'),
+            }
+
+            # Substitute variables in template content
+            content = TemplatesDAO.substitute_variables(template['content'], variables)
+
+            # Increment usage count
+            await TemplatesDAO.increment_usage(conn, template_id)
+
+            # Send template content as reply prompt
+            await bot.send_message(
+                chat_id,
+                f"📝 Template: **{template['name']}**\n\n"
+                f"{content}\n\n"
+                f"Send your message to confirm, or /cancel to abort.",
+                parse_mode='Markdown'
+            )
+
+            # Update user state with template content as draft
+            state_data['data']['draft_content'] = content
+            bot.set_user_state(user_id, state_data['state'], state_data['data'])
+
+            await bot.answer_callback_query(query['id'], f"✅ Template '{template['name']}' applied")
+            logger.info(f"Applied template {template_id} for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error applying template {template_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], f"❌ Error: {str(e)}", show_alert=True)
+
+
+async def callback_template_delete(query: dict, bot: 'TelegramBot'):
+    """
+    Handle template_delete_{template_id} callback.
+
+    Show confirmation dialog before deleting a template.
+    """
+    user_id = query['from']['id']
+    message = query['message']
+    chat_id = message['chat']['id']
+    data = query['data']
+
+    # Extract template_id from callback data
+    try:
+        template_id = int(data.split('_')[-1])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.answer_callback_query(query['id'], "❌ Invalid template ID")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.templates_dao import TemplatesDAO
+    from ..database.dao.user_dao import UserDAO
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Get template
+            template = await TemplatesDAO.get_template_by_id(conn, template_id)
+            if not template:
+                await bot.answer_callback_query(query['id'], "❌ Template not found", show_alert=True)
+                return
+
+            # Verify template belongs to user
+            if template['user_id'] != user_id_db:
+                await bot.answer_callback_query(query['id'], "❌ Access denied", show_alert=True)
+                return
+
+            # Delete template
+            deleted = await TemplatesDAO.delete_template_by_id(conn, template_id)
+
+            if deleted:
+                await bot.answer_callback_query(
+                    query['id'],
+                    f"✅ Template '{template['name']}' deleted"
+                )
+                logger.info(f"Deleted template {template_id} for user {user_id}")
+            else:
+                await bot.answer_callback_query(query['id'], "❌ Failed to delete", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Error deleting template {template_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], f"❌ Error: {str(e)}", show_alert=True)
+
+
+# =============================================================================
 # Handler Registration
 # =============================================================================
 
@@ -4373,6 +4866,12 @@ def register_all_handlers(bot: 'TelegramBot'):
 
     # Statistics command handlers
     bot.register_command_handler('/stats', cmd_stats)
+
+    # Export command handlers
+    bot.register_command_handler('/export', cmd_export)
+
+    # Template command handlers
+    bot.register_command_handler('/templates', cmd_templates)
 
     # Callback handlers
     bot.register_callback_handler('reply_', callback_reply)
@@ -4424,6 +4923,10 @@ def register_all_handlers(bot: 'TelegramBot'):
     # Statistics callbacks
     bot.register_callback_handler('stats_period_', callback_stats_period)
     bot.register_callback_handler('stats_refresh_', callback_stats_refresh)
+
+    # Template callbacks
+    bot.register_callback_handler('use_template_', callback_use_template)
+    bot.register_callback_handler('template_delete_', callback_template_delete)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

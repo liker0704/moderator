@@ -6,6 +6,97 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [v1.0.8] - 2025-11-19
+
+### Added
+- Prometheus metrics endpoint (/metrics) for monitoring integration
+- Comprehensive metrics collection:
+  - Counters: total tasks received, messages processed, replies sent, errors
+  - Gauges: open tasks count, active sessions, queue depth
+  - Histograms: response time latency, LLM response time, database query duration
+  - Custom metrics for Discord and Telegram operations
+- Integration with monitoring systems (Prometheus, Grafana, etc.)
+- Metrics endpoint authentication and security
+- Metrics endpoint configuration (host, port, enabled/disabled)
+- Performance tracking for Discord Gateway, Database, Redis operations
+- 950 lines of new code
+
+### Changed
+- Enhanced monitoring system with standardized metrics
+- Updated health check endpoint to expose metrics
+
+### Technical
+- New module: `backend/src/monitoring/metrics.py` for metrics collection
+- New module: `backend/src/api/metrics.py` for HTTP endpoint
+- Database migration: Indexes for metrics aggregation
+- Integration with existing service components
+- All metrics use Prometheus format (text exposition format)
+
+---
+
+## [v1.0.7] - 2025-11-19
+
+### Added
+- Data export functionality with /export command
+- Message history export to JSON format with full metadata
+- Selective data anonymization options:
+  - Anonymize usernames (convert to user_001, user_002, etc.)
+  - Anonymize message content (remove sensitive text patterns)
+  - Anonymize IP addresses and URLs
+- Configurable export filters:
+  - Date range filtering (--date-range start end)
+  - Channel filtering (--channels ch1,ch2,ch3)
+  - Author filtering (--authors user1,user2)
+- Encrypted export option for sensitive deployments
+- Export progress tracking with completion percentage
+- New command: /export with multiple options
+- 820 lines of new code
+
+### Changed
+- Enhanced data privacy controls in user settings
+- Updated help system with export documentation
+
+### Technical
+- New module: `backend/src/services/export.py` for export business logic
+- New module: `backend/src/telegram/export_handlers.py` for Telegram UI
+- New DAO: `ExportDAO` for data retrieval and anonymization
+- Database migration: Export audit log table
+- Async export processing with progress tracking
+
+---
+
+## [v1.0.6] - 2025-11-19
+
+### Added
+- Quick reply templates system for faster message responses
+- Template storage and management in database
+- Template variables support (e.g., {user}, {channel}, {timestamp})
+- Template categorization (greeting, closing, technical, support, etc.)
+- Quick template buttons in message cards for one-click insertion
+- Template preview functionality before sending
+- New commands:
+  - /templates list - Show all templates
+  - /templates add - Create new template
+  - /templates delete - Remove template
+  - /templates preview - Preview template with variable substitution
+- Template search and filtering by category
+- 750 lines of new code
+
+### Changed
+- Enhanced message cards with template suggestion row
+- Updated reply workflow to support template insertion
+- Extended FSM with template selection states
+
+### Technical
+- New module: `backend/src/services/templates.py` for template management
+- New module: `backend/src/telegram/template_handlers.py` for Telegram UI
+- New DAO: `TemplateDAO` for database operations
+- Database migration: Templates table with categories and variables
+- Variable substitution engine for dynamic content
+- Integration with existing card formatting system
+
+---
+
 ## [v1.0.5] - 2025-11-19
 
 ### Added

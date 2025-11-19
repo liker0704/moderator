@@ -2,8 +2,8 @@
 
 > A unified Telegram-based console for moderating Discord and Telegram messages
 
-**Version**: v1.0.5
-**Status**: v1.0 Iteration 5 - Statistics & Metrics Complete ✅
+**Version**: v1.0.8
+**Status**: v1.0 Iteration 8 - Prometheus Metrics Complete ✅
 **Last Updated**: November 19, 2025
 
 ---
@@ -152,10 +152,37 @@ This system is designed for a **single moderator** (single-user system).
 - Database indexes for analytics performance
 - 1,489 lines of new code
 
-### Planned Features
+### v1.0 New Features (Iteration 6)
 
-**v1.0** (Remaining)
-- Quick reply templates
+**✅ Quick Reply Templates** (2025-11-19)
+- Template storage and management system
+- Template variables support (e.g., {user}, {channel})
+- Quick template buttons in message cards
+- New commands: /templates list, /templates add, /templates delete
+- Template database schema with categories
+- Variable substitution engine
+- Template preview functionality
+
+### v1.0 New Features (Iteration 7)
+
+**✅ Export & Anonymization** (2025-11-19)
+- Export message history to JSON format
+- Selective data anonymization
+- New command: /export
+- Data privacy controls
+- Configurable export filters
+- Encrypted export option
+
+### v1.0 New Features (Iteration 8)
+
+**✅ Prometheus Metrics** (2025-11-19)
+- Prometheus metrics endpoint (/metrics)
+- Counters: total tasks, messages received, replies sent
+- Gauges: open tasks, active sessions
+- Histograms: response time latency, LLM response time
+- Custom metrics for Discord/Telegram operations
+- Integration with monitoring systems (Prometheus, Grafana)
+- Metrics endpoint security
 
 See [ROADMAP.md](docs/ROADMAP.md) for detailed version plans.
 
@@ -667,6 +694,22 @@ The **[Edit]** button is available for replies sent within the last 48 hours.
 | Command | Description |
 |---------|-------------|
 | `/stats` | View statistics and metrics (response time, activity, LLM usage) |
+
+#### Quick Reply Templates (v1.0 Iteration 6)
+
+| Command | Description |
+|---------|-------------|
+| `/templates list` | List all saved reply templates |
+| `/templates add` | Create a new reply template with variables |
+| `/templates delete` | Remove a reply template |
+
+#### Export & Data Management (v1.0 Iteration 7)
+
+| Command | Description |
+|---------|-------------|
+| `/export` | Export message history to JSON (with anonymization options) |
+| `/export --anonymize` | Export with sensitive data removed |
+| `/export --date-range` | Export messages within date range |
 
 ### Common Workflows
 

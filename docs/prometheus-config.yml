@@ -1,0 +1,85 @@
+# Prometheus Scrape Configuration for Moderator Application
+#
+# This configuration file demonstrates how to configure Prometheus to scrape
+# metrics from the moderator application.
+#
+# Usage:
+#   1. Add this configuration to your prometheus.yml file
+#   2. Restart Prometheus
+#   3. Verify metrics are being collected in Prometheus UI
+#
+# Documentation:
+#   - Prometheus Configuration: https://prometheus.io/docs/prometheus/latest/configuration/configuration/
+#   - Scrape Config: https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config
+
+# Global configuration
+global:
+  # How frequently to scrape targets by default
+  scrape_interval: 15s
+
+  # How long until a scrape request times out
+  scrape_timeout: 10s
+
+  # How frequently to evaluate rules
+  evaluation_interval: 15s
+
+# Scrape configurations
+scrape_configs:
+  # Moderator application metrics
+  - job_name: 'moderator'
+
+    # Override global scrape interval for this job
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+    # Metrics path (default is /metrics)
+    metrics_path: /metrics
+
+    # Target scheme (http or https)
+    scheme: http
+
+    # Static targets to scrape
+    static_configs:
+      - targets:
+          # If running in Docker Compose, use service name
+          - 'backend:8000'
+
+          # If running locally or accessible via hostname
+          # - 'localhost:8000'
+          # - 'moderator.example.com:8000'
+
+        # Labels to attach to all metrics from this target
+        labels:
+          application: 'moderator'
+          environment: 'production'
+          instance: 'primary'
+
+    # Optional: Relabel configurations to customize labels
+    # relabel_configs:
+    #   - source_labels: [__address__]
+    #     target_label: instance
+    #     regex: '([^:]+)(:[0-9]+)?'
+    #     replacement: '${1}'
+
+  # Example: Multiple instances
+  # - job_name: 'moderator-staging'
+  #   scrape_interval: 30s
+  #   metrics_path: /metrics
+  #   scheme: http
+  #   static_configs:
+  #     - targets:
+  #         - 'staging-backend:8000'
+  #       labels:
+  #         application: 'moderator'
+  #         environment: 'staging'
+
+# Alerting configuration (optional)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#             - 'alertmanager:9093'
+
+# Rule files (optional)
+# rule_files:
+#   - '/etc/prometheus/rules/*.yml'

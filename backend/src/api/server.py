@@ -14,8 +14,16 @@ from .health import health_check_handler
 
 logger = get_logger(__name__)
 
+# Import metrics handler if metrics are enabled
+try:
+    from .metrics import metrics_handler
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    logger.warning("Metrics module not available")
 
-def create_app(discord_gateway=None) -> web.Application:
+
+def create_app(discord_gateway=None, metrics_enabled: bool = False) -> web.Application:
     """
     Create and configure aiohttp Application instance.
 
@@ -23,6 +31,7 @@ def create_app(discord_gateway=None) -> web.Application:
 
     Args:
         discord_gateway: Optional DiscordGatewayManager instance for health checks
+        metrics_enabled: Whether to enable Prometheus metrics endpoint (default: False)
 
     Returns:
         Configured aiohttp Application instance
@@ -36,6 +45,13 @@ def create_app(discord_gateway=None) -> web.Application:
     # Register health check route
     app.router.add_get('/health', health_check_handler)
 
+    # Register metrics route if enabled
+    if metrics_enabled and METRICS_AVAILABLE:
+        app.router.add_get('/metrics', metrics_handler)
+        logger.info("Prometheus metrics endpoint enabled at /metrics")
+    elif metrics_enabled and not METRICS_AVAILABLE:
+        logger.warning("Metrics requested but metrics module not available")
+
     logger.debug("Health Check API application created")
 
     return app
@@ -44,7 +60,8 @@ def create_app(discord_gateway=None) -> web.Application:
 async def run_health_check_server(
     discord_gateway=None,
     host: str = '0.0.0.0',
-    port: int = 8000
+    port: int = 8000,
+    metrics_enabled: bool = False
 ) -> None:
     """
     Run Health Check API server.
@@ -56,6 +73,7 @@ async def run_health_check_server(
         discord_gateway: Optional DiscordGatewayManager instance for health checks
         host: Host address to bind to (default: 0.0.0.0)
         port: Port to bind to (default: 8000, overridden by HEALTH_CHECK_PORT env var)
+        metrics_enabled: Whether to enable Prometheus metrics endpoint (default: False)
 
     Raises:
         asyncio.CancelledError: When server shutdown is requested
@@ -65,9 +83,11 @@ async def run_health_check_server(
     port = int(os.getenv('HEALTH_CHECK_PORT', port))
 
     logger.info(f"Initializing Health Check API server on {host}:{port}")
+    if metrics_enabled:
+        logger.info("Prometheus metrics endpoint will be available at /metrics")
 
     # Create application
-    app = create_app(discord_gateway)
+    app = create_app(discord_gateway, metrics_enabled=metrics_enabled)
 
     # Create and setup runner
     runner = web.AppRunner(app)
@@ -84,6 +104,8 @@ async def run_health_check_server(
             raise
 
         logger.info(f"Health Check API server running on http://{host}:{port}/health")
+        if metrics_enabled and METRICS_AVAILABLE:
+            logger.info(f"Prometheus metrics available at http://{host}:{port}/metrics")
 
         # Wait indefinitely (until cancelled)
         await asyncio.Event().wait()

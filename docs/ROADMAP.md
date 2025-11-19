@@ -224,20 +224,20 @@
 - [x] Database indexes для аналитики
 - [x] 1,489 строк нового кода
 
-#### 5. Шаблоны быстрых ответов (2 дня)
-- [ ] Хранение шаблонов (БД)
-- [ ] Команды:
-  - [ ] /templates list
-  - [ ] /templates add
-  - [ ] /templates delete
-- [ ] Кнопки шаблонов в карточках
-- [ ] Подстановка переменных (опционально)
+#### 5. Шаблоны быстрых ответов (2 дня) ✅ COMPLETE (v1.0 Iteration 6, 2025-11-19)
+- [x] Хранение шаблонов (БД)
+- [x] Команды:
+  - [x] /templates list
+  - [x] /templates add
+  - [x] /templates delete
+- [x] Кнопки шаблонов в карточках
+- [x] Подстановка переменных
 
-#### 6. Анонимизация/экспорт (2 дня)
-- [ ] Команда /export (экспорт данных в JSON)
-- [ ] Ручная анонимизация (опционально)
+#### 6. Анонимизация/экспорт (2 дня) ✅ COMPLETE (v1.0 Iteration 7, 2025-11-19)
+- [x] Команда /export (экспорт данных в JSON)
+- [x] Ручная анонимизация
 
-#### 7. Health Check API (1 день) ✅ COMPLETE (v1.0 Iteration 1)
+#### 7. Health Check API (1 день) ✅ COMPLETE (v1.0 Iteration 1, 2025-11-18)
 - [x] Endpoint /health
 - [x] Проверки:
   - [x] Discord connection
@@ -245,12 +245,12 @@
   - [x] Redis
   - [x] LLM API (опционально)
 
-#### 8. Prometheus metrics (опционально, 2 дня)
-- [ ] Endpoint /metrics
-- [ ] Метрики:
-  - [ ] Счетчики (tasks, messages)
-  - [ ] Histograms (latency)
-  - [ ] Gauges (open tasks)
+#### 8. Prometheus metrics (2 дня) ✅ COMPLETE (v1.0 Iteration 8, 2025-11-19)
+- [x] Endpoint /metrics
+- [x] Метрики:
+  - [x] Счетчики (tasks, messages)
+  - [x] Histograms (latency)
+  - [x] Gauges (open tasks)
 
 #### 9. Улучшения безопасности (2 дня)
 - [ ] Secrets management (Docker secrets)

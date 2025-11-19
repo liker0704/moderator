@@ -527,7 +527,8 @@ def create_card_keyboard(
     show_more: bool = True,
     variants: Optional[List[Dict]] = None,
     show_ai_buttons: bool = True,
-    posted_reply: Optional[Dict] = None
+    posted_reply: Optional[Dict] = None,
+    templates: Optional[List[Dict]] = None
 ) -> dict:
     """
     Create inline keyboard for message card.
@@ -538,12 +539,14 @@ def create_card_keyboard(
         variants: AI response variants (if available)
         show_ai_buttons: Show AI-related buttons (Soften, More variants)
         posted_reply: Posted reply dict (optional) - enables Edit button
+        templates: User's quick reply templates (top 3 most used)
 
     Returns:
         Telegram inline keyboard dict
 
     Note:
         Edit button shows only if posted_reply provided and < 48h since posting
+        Template buttons show top 3 most used templates for quick access
     """
     keyboard = {'inline_keyboard': []}
 
@@ -581,6 +584,20 @@ def create_card_keyboard(
             {'text': '🔄 More Variants', 'callback_data': f'more_variants_{task_id}'}
         ]
         keyboard['inline_keyboard'].append(ai_row)
+
+    # Template buttons (show top 3 most used templates)
+    if templates:
+        for template in templates[:3]:
+            template_id = template['id']
+            template_name = template['name']
+
+            # Truncate long template names
+            if len(template_name) > 20:
+                template_name = template_name[:17] + "..."
+
+            keyboard['inline_keyboard'].append([
+                {'text': f'📝 {template_name}', 'callback_data': f'use_template_{template_id}'}
+            ])
 
     # Context row
     context_row = [
