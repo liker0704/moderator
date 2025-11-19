@@ -78,7 +78,7 @@ def format_variants_section(variants: List[Dict]) -> str:
     return section
 
 
-def format_card(message: dict, context_messages: list, variants: Optional[List[Dict]] = None) -> str:
+def format_card(message: dict, context_messages: list, variants: Optional[List[Dict]] = None, server_name: Optional[str] = None) -> str:
     """
     Format a message card for Telegram display.
 
@@ -94,6 +94,7 @@ def format_card(message: dict, context_messages: list, variants: Optional[List[D
             - has_image: Boolean
         context_messages: List of previous messages (same format)
         variants: Optional list of AI variant dicts
+        server_name: Optional server name to display (if None, falls back to truncated server_id)
 
     Returns:
         Formatted card text string
@@ -106,9 +107,12 @@ def format_card(message: dict, context_messages: list, variants: Optional[List[D
 
     # Add server name for Discord (if available)
     if message.get('server_id'):
-        # TODO: Get server name from Discord or cache
-        server_id = str(message['server_id'])
-        header_parts.append(f"Server:{server_id[:8]}...")
+        # Use server name if provided, otherwise fall back to truncated server_id
+        if server_name:
+            header_parts.append(server_name)
+        else:
+            server_id = str(message['server_id'])
+            header_parts.append(f"Server:{server_id[:8]}...")
 
     # Add channel
     channel_id = message.get('channel_id')
@@ -351,6 +355,169 @@ def _truncate_text(text: str, max_length: int) -> str:
     return text[:max_length - 3] + "..."
 
 
+def format_server_list_card(servers: List[Dict], allowlist_stats: Dict) -> str:
+    """
+    Format a list of Discord servers with allowlist statistics.
+
+    Args:
+        servers: List of server dicts with keys:
+            - id: Server ID
+            - name: Server name
+            - icon: Server icon URL (optional)
+        allowlist_stats: Dict mapping server_id -> count of allowed channels
+
+    Returns:
+        Formatted server list card
+
+    Example:
+        >>> servers = [
+        ...     {'id': '123', 'name': 'My Server'},
+        ...     {'id': '456', 'name': 'Test Server'}
+        ... ]
+        >>> stats = {'123': 5, '456': 0}
+        >>> card = format_server_list_card(servers, stats)
+    """
+    if not servers:
+        return "🌐 Your Discord Servers\n\nNo servers found.\n\nPlease check your Discord connection."
+
+    card = "🌐 Your Discord Servers\n"
+
+    total_servers = len(servers)
+    total_allowed = 0
+
+    for server in servers:
+        server_id = str(server.get('id', ''))
+        server_name = server.get('name', 'Unknown Server')
+        allowed_count = allowlist_stats.get(server_id, 0)
+        total_allowed += allowed_count
+
+        # Truncate long server names
+        if len(server_name) > 40:
+            server_name = server_name[:37] + "..."
+
+        # Format with emoji and count
+        card += f"\n🔷 {server_name} - {allowed_count} channel{'s' if allowed_count != 1 else ''} allowed"
+
+    # Add summary footer
+    card += f"\n\n📊 Total: {total_servers} server{'s' if total_servers != 1 else ''}, {total_allowed} channel{'s' if total_allowed != 1 else ''} allowed"
+
+    return card
+
+
+def format_channel_list_card(server: Dict, channels: List[Dict], allowlist: List[str]) -> str:
+    """
+    Format a list of channels in a server with allowlist status.
+
+    Args:
+        server: Server dict with keys:
+            - id: Server ID
+            - name: Server name
+        channels: List of channel dicts with keys:
+            - id: Channel ID
+            - name: Channel name
+            - type: Channel type (0=text, 2=voice, 4=category, 5=announcement, 10-12=thread variants)
+            - parent_id: Parent category ID (optional)
+        allowlist: List of channel IDs that are currently allowed
+
+    Returns:
+        Formatted channel list card
+
+    Example:
+        >>> server = {'id': '123', 'name': 'My Server'}
+        >>> channels = [
+        ...     {'id': '1', 'name': 'general', 'type': 0},
+        ...     {'id': '2', 'name': 'random', 'type': 0}
+        ... ]
+        >>> allowlist = ['1']
+        >>> card = format_channel_list_card(server, channels, allowlist)
+    """
+    server_name = server.get('name', 'Unknown Server')
+    if len(server_name) > 50:
+        server_name = server_name[:47] + "..."
+
+    card = f"📡 Channels in \"{server_name}\"\n"
+
+    if not channels:
+        return card + "\nNo channels found in this server."
+
+    # Channel type mapping
+    type_emojis = {
+        0: '📝',   # Text channel
+        2: '🔊',   # Voice channel
+        4: '📁',   # Category
+        5: '📢',   # Announcement channel
+        10: '🧵',  # Announcement thread
+        11: '🧵',  # Public thread
+        12: '🧵',  # Private thread
+        13: '🎤',  # Stage channel
+        15: '🗂️',  # Forum channel
+    }
+
+    type_labels = {
+        0: 'Text Channels',
+        2: 'Voice Channels',
+        5: 'Announcement Channels',
+        10: 'Threads',
+        11: 'Threads',
+        12: 'Threads',
+        13: 'Stage Channels',
+        15: 'Forum Channels',
+    }
+
+    # Group channels by type (exclude categories)
+    channels_by_type = {}
+    for channel in channels:
+        channel_type = channel.get('type', 0)
+        if channel_type == 4:  # Skip categories
+            continue
+
+        # Normalize thread types
+        if channel_type in [10, 11, 12]:
+            channel_type = 11  # Group all threads together
+
+        if channel_type not in channels_by_type:
+            channels_by_type[channel_type] = []
+
+        channels_by_type[channel_type].append(channel)
+
+    # Format channels by type
+    total_channels = 0
+    total_allowed = 0
+
+    for channel_type in sorted(channels_by_type.keys()):
+        type_label = type_labels.get(channel_type, 'Other Channels')
+        type_emoji = type_emojis.get(channel_type, '📝')
+
+        card += f"\n{type_emoji} {type_label}:\n"
+
+        for channel in channels_by_type[channel_type]:
+            channel_id = str(channel.get('id', ''))
+            channel_name = channel.get('name', 'unknown')
+
+            # Check if channel is in allowlist
+            is_allowed = channel_id in allowlist
+            status_emoji = "✅" if is_allowed else "❌"
+            status_text = "allowed" if is_allowed else "not allowed"
+
+            # Truncate long channel names
+            if len(channel_name) > 35:
+                channel_name = channel_name[:32] + "..."
+
+            # Add # prefix for text channels
+            prefix = "#" if channel_type in [0, 5] else ""
+
+            card += f"{status_emoji} {prefix}{channel_name} ({status_text})\n"
+
+            total_channels += 1
+            if is_allowed:
+                total_allowed += 1
+
+    # Add summary footer
+    card += f"\n📊 Total: {total_channels} channel{'s' if total_channels != 1 else ''} ({total_allowed} allowed)"
+
+    return card
+
+
 # =============================================================================
 # Keyboard Creation Functions
 # =============================================================================
@@ -359,7 +526,9 @@ def create_card_keyboard(
     task_id: int,
     show_more: bool = True,
     variants: Optional[List[Dict]] = None,
-    show_ai_buttons: bool = True
+    show_ai_buttons: bool = True,
+    posted_reply: Optional[Dict] = None,
+    templates: Optional[List[Dict]] = None
 ) -> dict:
     """
     Create inline keyboard for message card.
@@ -369,9 +538,15 @@ def create_card_keyboard(
         show_more: Whether to show "Показать больше" button (default: True)
         variants: AI response variants (if available)
         show_ai_buttons: Show AI-related buttons (Soften, More variants)
+        posted_reply: Posted reply dict (optional) - enables Edit button
+        templates: User's quick reply templates (top 3 most used)
 
     Returns:
         Telegram inline keyboard dict
+
+    Note:
+        Edit button shows only if posted_reply provided and < 48h since posting
+        Template buttons show top 3 most used templates for quick access
     """
     keyboard = {'inline_keyboard': []}
 
@@ -410,11 +585,49 @@ def create_card_keyboard(
         ]
         keyboard['inline_keyboard'].append(ai_row)
 
+    # Template buttons (show top 3 most used templates)
+    if templates:
+        for template in templates[:3]:
+            template_id = template['id']
+            template_name = template['name']
+
+            # Truncate long template names
+            if len(template_name) > 20:
+                template_name = template_name[:17] + "..."
+
+            keyboard['inline_keyboard'].append([
+                {'text': f'📝 {template_name}', 'callback_data': f'use_template_{template_id}'}
+            ])
+
     # Context row
     context_row = [
         {'text': '🔕 DND', 'callback_data': 'toggle_dnd'}
     ]
     keyboard['inline_keyboard'].append(context_row)
+
+    # Edit buttons (if reply was posted and < 48 hours)
+    if posted_reply and posted_reply.get('posted_at'):
+        from datetime import timezone
+
+        posted_at = posted_reply['posted_at']
+
+        # Handle both datetime and string
+        if isinstance(posted_at, str):
+            posted_at = datetime.fromisoformat(posted_at.replace('Z', '+00:00'))
+
+        # Calculate hours since posting
+        now = datetime.now(timezone.utc)
+        hours_since = (now - posted_at).total_seconds() / 3600
+
+        # Show Edit button only if < 48 hours
+        if hours_since < 48:
+            reply_id = posted_reply['id']
+            keyboard['inline_keyboard'].append([
+                {'text': '✏️ Edit Reply', 'callback_data': f'edit_reply_{reply_id}'}
+            ])
+            keyboard['inline_keyboard'].append([
+                {'text': '📊 Show History', 'callback_data': f'show_history_{reply_id}'}
+            ])
 
     return keyboard
 
@@ -527,6 +740,137 @@ def create_pagination_keyboard(
     ])
 
     return {'inline_keyboard': keyboard}
+
+
+def create_server_list_keyboard(servers: List[Dict]) -> dict:
+    """
+    Create inline keyboard for Discord server selection.
+
+    Args:
+        servers: List of server dicts with keys:
+            - id: Server ID
+            - name: Server name
+
+    Returns:
+        Telegram inline keyboard dict with server selection buttons
+
+    Example:
+        >>> servers = [
+        ...     {'id': '123', 'name': 'My Server'},
+        ...     {'id': '456', 'name': 'Test Server'}
+        ... ]
+        >>> keyboard = create_server_list_keyboard(servers)
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Add one button per server (each on its own row)
+    for server in servers:
+        server_id = str(server.get('id', ''))
+        server_name = server.get('name', 'Unknown Server')
+
+        # Truncate server name to fit in button (max ~40 chars for readability)
+        if len(server_name) > 35:
+            server_name = server_name[:32] + "..."
+
+        keyboard['inline_keyboard'].append([
+            {'text': f'🔷 {server_name}', 'callback_data': f'server_select_{server_id}'}
+        ])
+
+    # Add refresh button at bottom
+    keyboard['inline_keyboard'].append([
+        {'text': '🔄 Refresh Cache', 'callback_data': 'refresh_server_cache'}
+    ])
+
+    return keyboard
+
+
+def create_channel_list_keyboard(
+    server_id: str,
+    channels: List[Dict],
+    selected: List[str],
+    allowlist: List[str]
+) -> dict:
+    """
+    Create inline keyboard for channel selection and allowlist management.
+
+    Args:
+        server_id: Server ID
+        channels: List of channel dicts with keys:
+            - id: Channel ID
+            - name: Channel name
+            - type: Channel type
+        selected: List of currently selected channel IDs (for multi-select UI)
+        allowlist: List of channel IDs currently in allowlist
+
+    Returns:
+        Telegram inline keyboard dict with channel toggle buttons
+
+    Features:
+        - Shows ✅/❌ based on current allowlist status
+        - Shows ☑️/☐ for multi-select state
+        - Handles pagination if > 15 channels
+        - Includes action buttons: Select All, Save, Cancel
+
+    Example:
+        >>> channels = [
+        ...     {'id': '1', 'name': 'general', 'type': 0},
+        ...     {'id': '2', 'name': 'random', 'type': 0}
+        ... ]
+        >>> keyboard = create_channel_list_keyboard('123', channels, ['1'], ['1'])
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Limit to 15 channels per page to avoid keyboard size limits
+    MAX_CHANNELS_PER_PAGE = 15
+    display_channels = channels[:MAX_CHANNELS_PER_PAGE]
+
+    # Add channel toggle buttons
+    for channel in display_channels:
+        channel_id = str(channel.get('id', ''))
+        channel_name = channel.get('name', 'unknown')
+        channel_type = channel.get('type', 0)
+
+        # Determine status emoji (allowlist status)
+        is_allowed = channel_id in allowlist
+        status_emoji = "✅" if is_allowed else "❌"
+
+        # Determine selection emoji (current selection state)
+        is_selected = channel_id in selected
+        select_emoji = "☑️" if is_selected else "☐"
+
+        # Add # prefix for text channels
+        prefix = "#" if channel_type in [0, 5] else ""
+
+        # Truncate channel name to fit in button
+        if len(channel_name) > 25:
+            channel_name = channel_name[:22] + "..."
+
+        button_text = f"{status_emoji} {select_emoji} {prefix}{channel_name}"
+
+        keyboard['inline_keyboard'].append([
+            {'text': button_text, 'callback_data': f'channel_toggle_{channel_id}'}
+        ])
+
+    # Add pagination info if there are more channels
+    if len(channels) > MAX_CHANNELS_PER_PAGE:
+        remaining = len(channels) - MAX_CHANNELS_PER_PAGE
+        keyboard['inline_keyboard'].append([
+            {'text': f'⚠️ Showing first {MAX_CHANNELS_PER_PAGE} of {len(channels)} channels', 'callback_data': 'noop'}
+        ])
+
+    # Add action buttons row
+    action_row = [
+        {'text': '☑️ Select All', 'callback_data': f'channel_select_all_{server_id}'},
+        {'text': '💾 Save', 'callback_data': f'channel_save_{server_id}'}
+    ]
+    keyboard['inline_keyboard'].append(action_row)
+
+    # Add cancel button
+    keyboard['inline_keyboard'].append([
+        {'text': '❌ Cancel', 'callback_data': 'channel_cancel'}
+    ])
+
+    return keyboard
 
 
 # =============================================================================
@@ -738,6 +1082,187 @@ def create_simple_card(
 
 
 # =============================================================================
+# Search Result Formatting Functions
+# =============================================================================
+
+def format_search_results(
+    results: List[Dict[str, Any]],
+    page: int,
+    total_results: int,
+    total_pages: int,
+    filters: Dict[str, Any],
+    query_string: str
+) -> str:
+    """
+    Format search results for Telegram display.
+
+    Args:
+        results: List of message dictionaries from search
+        page: Current page number
+        total_results: Total number of matching messages
+        total_pages: Total number of pages
+        filters: Parsed filter dictionary
+        query_string: Original search query string
+
+    Returns:
+        Formatted search results card
+
+    Example:
+        >>> results = [
+        ...     {'author_name': 'john', 'content': 'Hello world', 'created_at': datetime.now()},
+        ...     {'author_name': 'alice', 'content': 'Hi there', 'created_at': datetime.now()}
+        ... ]
+        >>> card = format_search_results(
+        ...     results, page=1, total_results=25, total_pages=3,
+        ...     filters={'text_query': 'hello'}, query_string='hello'
+        ... )
+    """
+    from ..services.search import SearchService
+
+    # Header
+    card = f"🔍 Search Results\n"
+    card += f"Query: \"{query_string}\"\n"
+    card += f"\n📊 Page {page}/{total_pages} • Total: {total_results} message{'s' if total_results != 1 else ''}\n"
+
+    # Show active filters
+    if filters:
+        filters_summary = SearchService.format_filters_summary(filters)
+        card += f"\n📌 Filters:\n{filters_summary}\n"
+
+    # Show results
+    if not results:
+        card += "\n❌ No messages found matching your search.\n"
+        card += "\n💡 Try:\n"
+        card += "• Using different search terms\n"
+        card += "• Removing some filters\n"
+        card += "• Checking date ranges\n"
+        card += "\nUse /search_help for syntax help."
+    else:
+        card += "\n📝 Results:\n"
+
+        for idx, msg in enumerate(results, 1):
+            # Format timestamp
+            timestamp = msg.get('created_at') or msg.get('platform_created_at')
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                except:
+                    timestamp = None
+
+            if timestamp:
+                time_str = timestamp.strftime('%Y-%m-%d %H:%M')
+            else:
+                time_str = "Unknown date"
+
+            # Platform emoji
+            platform_emoji = "💬" if msg.get('platform') == 'telegram' else "📝"
+
+            # Author
+            author = msg.get('author_name', 'Unknown')
+
+            # Content preview with highlighting
+            content = msg.get('content', '[No content]')
+            text_query = filters.get('text_query')
+            content_preview = SearchService.highlight_text(content, text_query, max_length=100)
+
+            # Channel info
+            channel_id = msg.get('channel_id', '')
+            channel_short = str(channel_id)[:8] if channel_id else 'unknown'
+
+            # Build result entry
+            card += f"\n{idx}. {platform_emoji} {author} • {time_str}\n"
+            card += f"   Channel: {channel_short}... • ID: {msg['id']}\n"
+            card += f"   {content_preview}\n"
+
+        # Add footer
+        card += f"\n💡 Use pagination buttons below to navigate"
+        card += f"\n🔍 Use /search_help for syntax help"
+
+    # Truncate if too long
+    if len(card) > MAX_MESSAGE_LENGTH - 100:
+        card = card[:MAX_MESSAGE_LENGTH - 200] + "\n\n[Results truncated...]"
+
+    return card
+
+
+def create_search_keyboard(
+    query_string: str,
+    page: int,
+    total_pages: int,
+    has_prev: bool,
+    has_next: bool
+) -> dict:
+    """
+    Create pagination keyboard for search results.
+
+    Args:
+        query_string: Original search query (encoded in callback data)
+        page: Current page number
+        total_pages: Total number of pages
+        has_prev: Whether previous page exists
+        has_next: Whether next page exists
+
+    Returns:
+        Telegram inline keyboard dict
+
+    Example:
+        >>> keyboard = create_search_keyboard(
+        ...     query_string="hello author:john",
+        ...     page=2,
+        ...     total_pages=5,
+        ...     has_prev=True,
+        ...     has_next=True
+        ... )
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Pagination row
+    pagination_row = []
+
+    if has_prev:
+        prev_page = page - 1
+        pagination_row.append({
+            'text': '◀️ Previous',
+            'callback_data': f'search_page_{prev_page}'
+        })
+
+    # Page indicator (non-clickable)
+    pagination_row.append({
+        'text': f'📄 {page}/{total_pages}',
+        'callback_data': 'noop'
+    })
+
+    if has_next:
+        next_page = page + 1
+        pagination_row.append({
+            'text': 'Next ▶️',
+            'callback_data': f'search_page_{next_page}'
+        })
+
+    keyboard['inline_keyboard'].append(pagination_row)
+
+    # Action row
+    action_row = [
+        {'text': '🔍 New Search', 'callback_data': 'search_new'},
+        {'text': '❓ Help', 'callback_data': 'search_help'}
+    ]
+    keyboard['inline_keyboard'].append(action_row)
+
+    return keyboard
+
+
+def format_search_help_card() -> str:
+    """
+    Format help card for search syntax.
+
+    Returns:
+        Formatted help card string
+    """
+    from ..services.search import SearchService
+    return SearchService.get_search_help_text()
+
+
+# =============================================================================
 # Example Usage (for testing)
 # =============================================================================
 
@@ -788,6 +1313,247 @@ def create_example_card() -> tuple[str, dict]:
     keyboard = create_card_keyboard(task_id=123)
 
     return card_text, keyboard
+
+
+def format_stats_card(stats: dict, period_days: int) -> str:
+    """
+    Format comprehensive statistics report for Telegram display.
+
+    Args:
+        stats: Statistics dictionary from StatsService.generate_stats_report()
+        period_days: Number of days in the reporting period
+
+    Returns:
+        Formatted stats card text
+
+    Example:
+        >>> from ..services.stats import StatsService
+        >>> report = await StatsService.generate_stats_report(conn, user_id=1, period_days=30)
+        >>> card = format_stats_card(report, 30)
+    """
+    from ..services.stats import StatsService
+
+    # Header
+    card = f"📊 Statistics Report\n"
+    card += f"Period: Last {period_days} day{'s' if period_days != 1 else ''}\n"
+    card += f"Generated: {stats['generated_at'].strftime('%Y-%m-%d %H:%M UTC')}\n"
+
+    # Task Overview Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"📋 Task Overview\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    task_stats = stats['task_stats']
+    total_tasks = task_stats['total']
+    completed = task_stats['completed']
+    pending = task_stats['pending']
+
+    card += f"Total Tasks: {StatsService.format_number(total_tasks)}\n"
+    card += f"✅ Completed: {StatsService.format_number(completed)}\n"
+    card += f"⏳ Pending: {StatsService.format_number(pending)}\n"
+
+    if task_stats['muted'] > 0:
+        card += f"🔕 Muted: {StatsService.format_number(task_stats['muted'])}\n"
+    if task_stats['error'] > 0:
+        card += f"❌ Error: {StatsService.format_number(task_stats['error'])}\n"
+
+    if total_tasks > 0:
+        completion_rate = StatsService.calculate_completion_rate(completed, total_tasks)
+        progress_bar = StatsService.create_progress_bar(completed, total_tasks, width=10)
+        card += f"\nCompletion Rate: {StatsService.format_percentage(completion_rate)}\n"
+        card += f"{progress_bar}\n"
+
+    # Response Time Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"⏱️ Response Time\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    avg_time = stats['response_time']['average']
+    if avg_time is not None:
+        card += f"Average: {StatsService.format_duration(avg_time)}\n"
+
+        percentiles = stats['response_time']['percentiles']
+        if percentiles['p50'] is not None:
+            card += f"P50 (Median): {StatsService.format_duration(percentiles['p50'])}\n"
+        if percentiles['p95'] is not None:
+            card += f"P95: {StatsService.format_duration(percentiles['p95'])}\n"
+        if percentiles['p99'] is not None:
+            card += f"P99: {StatsService.format_duration(percentiles['p99'])}\n"
+
+        # Distribution
+        distribution = stats['response_time']['distribution']
+        dist_total = sum(distribution.values())
+        if dist_total > 0:
+            card += f"\nDistribution:\n"
+            card += f"  < 5 min:  {distribution['under_5min']:3d} {StatsService.create_progress_bar(distribution['under_5min'], dist_total, 5)}\n"
+            card += f"  < 30 min: {distribution['under_30min']:3d} {StatsService.create_progress_bar(distribution['under_30min'], dist_total, 5)}\n"
+            card += f"  < 1 hour: {distribution['under_1h']:3d} {StatsService.create_progress_bar(distribution['under_1h'], dist_total, 5)}\n"
+            card += f"  < 6 hour: {distribution['under_6h']:3d} {StatsService.create_progress_bar(distribution['under_6h'], dist_total, 5)}\n"
+            card += f"  > 6 hour: {distribution['over_6h']:3d} {StatsService.create_progress_bar(distribution['over_6h'], dist_total, 5)}\n"
+    else:
+        card += "No response data available\n"
+
+    # Channel Activity Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"📡 Channel Activity\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    channel_load = stats['channel_load']
+    if channel_load:
+        card += f"Top {min(len(channel_load), 5)} busiest channels:\n\n"
+        for idx, channel in enumerate(channel_load[:5], 1):
+            platform_emoji = "💬" if channel['platform'] == 'telegram' else "📝"
+            channel_id_short = StatsService.format_channel_id(channel['channel_id'], 12)
+            msg_count = channel['message_count']
+            card += f"{idx}. {platform_emoji} {channel_id_short}\n"
+            card += f"   Messages: {StatsService.format_number(msg_count)}\n"
+    else:
+        card += "No channel activity data\n"
+
+    # Platform Breakdown
+    platform_breakdown = stats['platform_breakdown']
+    total_messages = sum(platform_breakdown.values())
+    if total_messages > 0:
+        card += f"\nPlatform Breakdown:\n"
+        discord_count = platform_breakdown.get('discord', 0)
+        telegram_count = platform_breakdown.get('telegram', 0)
+
+        if discord_count > 0:
+            discord_pct = (discord_count / total_messages) * 100
+            card += f"📝 Discord: {StatsService.format_number(discord_count)} ({discord_pct:.0f}%)\n"
+
+        if telegram_count > 0:
+            telegram_pct = (telegram_count / total_messages) * 100
+            card += f"💬 Telegram: {StatsService.format_number(telegram_count)} ({telegram_pct:.0f}%)\n"
+
+    # LLM Usage Section
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"🤖 LLM Usage\n"
+    card += f"━━━━━━━━━━━━━━━━━━━━\n"
+
+    llm_stats = stats['llm_usage']
+    total_requests = llm_stats['total_requests']
+
+    if total_requests > 0:
+        card += f"Total Requests: {StatsService.format_number(total_requests)}\n"
+        card += f"✅ Successful: {StatsService.format_number(llm_stats['successful_requests'])}\n"
+        if llm_stats['failed_requests'] > 0:
+            card += f"❌ Failed: {StatsService.format_number(llm_stats['failed_requests'])}\n"
+
+        success_rate = StatsService.calculate_success_rate(
+            llm_stats['successful_requests'],
+            total_requests
+        )
+        card += f"Success Rate: {StatsService.format_percentage(success_rate)}\n"
+
+        card += f"\nCost: {StatsService.format_cost(llm_stats['total_cost'])}\n"
+        card += f"Avg Cost/Request: {StatsService.format_cost(llm_stats['avg_cost'])}\n"
+
+        card += f"\nTokens: {StatsService.format_tokens(llm_stats['total_tokens'])}\n"
+        card += f"Avg Tokens/Request: {int(llm_stats['avg_tokens'])}\n"
+
+        # LLM Provider Breakdown
+        llm_breakdown = stats['llm_breakdown']
+        if llm_breakdown:
+            card += f"\nBy Provider/Model:\n"
+            for item in llm_breakdown[:3]:  # Top 3
+                provider = item['provider']
+                model = item['model']
+                cost = StatsService.format_cost(item['total_cost'])
+                requests = item['request_count']
+                card += f"  {provider}/{model[:20]}\n"
+                card += f"    {requests} req, {cost}\n"
+    else:
+        card += "No LLM usage data\n"
+
+    # Unclosed Tasks Section
+    unclosed_tasks = stats['unclosed_tasks']
+    if unclosed_tasks:
+        card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"⚠️ Unclosed Tasks (>24h)\n"
+        card += f"━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"Count: {len(unclosed_tasks)}\n\n"
+
+        for idx, task in enumerate(unclosed_tasks[:5], 1):  # Show max 5
+            age_str = StatsService.format_duration(task['age_seconds'])
+            author = task['author_name'] or 'Unknown'
+            content = task['content'] or '[No content]'
+            if len(content) > 50:
+                content = content[:47] + "..."
+
+            card += f"{idx}. Task #{task['id']} ({age_str} old)\n"
+            card += f"   From: {author}\n"
+            card += f"   {content}\n"
+
+        if len(unclosed_tasks) > 5:
+            card += f"\n... and {len(unclosed_tasks) - 5} more\n"
+
+    # Activity Distribution (optional)
+    hourly_dist = stats['hourly_distribution']
+    peak_hour = StatsService.get_peak_hour(hourly_dist)
+    if peak_hour is not None:
+        card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"📈 Activity Pattern\n"
+        card += f"━━━━━━━━━━━━━━━━━━━━\n"
+        card += f"Peak Hour: {peak_hour:02d}:00 UTC\n"
+
+        # Show activity sparkline for peak hours
+        max_count = max(hourly_dist.values()) if hourly_dist else 0
+        if max_count > 0:
+            card += f"\nBusiest Hours:\n"
+            # Find top 5 hours
+            sorted_hours = sorted(hourly_dist.items(), key=lambda x: x[1], reverse=True)[:5]
+            for hour, count in sorted_hours:
+                if count > 0:
+                    bar = StatsService.create_progress_bar(count, max_count, width=8)
+                    card += f"  {hour:02d}:00  {bar} {count}\n"
+
+    # Footer
+    card += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+    card += f"💡 Use buttons below to change time period\n"
+
+    # Truncate if too long
+    if len(card) > MAX_MESSAGE_LENGTH - 100:
+        card = card[:MAX_MESSAGE_LENGTH - 200] + "\n\n[Report truncated...]"
+
+    return card
+
+
+def create_stats_keyboard(current_period: int = 30) -> dict:
+    """
+    Create inline keyboard for statistics period selection.
+
+    Args:
+        current_period: Currently selected period in days
+
+    Returns:
+        Telegram inline keyboard dict
+
+    Example:
+        >>> keyboard = create_stats_keyboard(current_period=30)
+    """
+    keyboard = {'inline_keyboard': []}
+
+    # Period selection row
+    period_options = [7, 30, 90]
+    period_row = []
+
+    for period in period_options:
+        # Mark current period with checkmark
+        text = f"{'✓ ' if period == current_period else ''}{period} days"
+        period_row.append({
+            'text': text,
+            'callback_data': f'stats_period_{period}'
+        })
+
+    keyboard['inline_keyboard'].append(period_row)
+
+    # Refresh button
+    keyboard['inline_keyboard'].append([
+        {'text': '🔄 Refresh', 'callback_data': f'stats_refresh_{current_period}'}
+    ])
+
+    return keyboard
 
 
 if __name__ == '__main__':

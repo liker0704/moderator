@@ -14,6 +14,11 @@ Commands:
 - /allow_channel {server_id} {channel_id}: Add channel to allowlist
 - /unallow_channel [channel_id]: Remove channel from allowlist (with interactive selection)
 - /settings: View and edit settings with action buttons
+- /servers: List available Discord servers with allowlist counts
+- /channels [server_id]: Show channels for a server with allowlist status
+- /bulk_allow [server_id]: Bulk add multiple channels to allowlist
+- /search <query>: Search message history with advanced filters
+- /search_help: Show search syntax help and examples
 
 Callback handlers:
 - reply_{task_id}: Start reply flow for a task
@@ -33,6 +38,24 @@ Callback handlers:
 - settings_add_channel: Guide user to add channel
 - settings_remove_channel: Show removal dialog
 - settings_refresh: Refresh settings display
+- settings_servers: Show cached servers with allowlist statistics
+- settings_channels: Show channel distribution across servers
+- edit_reply_{reply_id}: Start editing an existing reply
+- confirm_edit_{new_reply_id}: Confirm and post edited reply
+- cancel_edit_{reply_id}: Cancel reply edit operation
+- show_history_{reply_id}: Display edit history for a reply
+- servers_refresh: Refresh Discord server cache from API
+- server_select_{server_id}: Show channels for selected server
+- channel_toggle_{server_id}_{channel_id}: Toggle channel allowlist status
+- bulk_select_server_{server_id}: Start bulk allow selection for server
+- bulk_toggle_{server_id}_{channel_id}: Toggle channel in bulk selection
+- bulk_confirm_{server_id}: Confirm and execute bulk add to allowlist
+- bulk_cancel: Cancel bulk allow operation
+- search_page_{page}: Navigate to specific search results page
+- search_new: Start a new search
+- search_help: Show search syntax help
+- search_example: Run an example search
+- search_back: Return to previous search results
 
 Each handler processes user input, interacts with services layer,
 and provides appropriate responses and keyboard layouts.
@@ -109,6 +132,28 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 /dnd [on|off|schedule] - Toggle or configure DND mode
 /settings - View/edit all settings (with action buttons)
 
+📝 Quick Reply Templates:
+/templates - List all your templates
+/templates add <name> <content> - Create a new template
+/templates delete <name> - Delete a template
+
+🔍 Search & History:
+/search <query> - Search message history with filters
+/search_help - Show search syntax and examples
+
+📊 Statistics & Metrics:
+/stats [7|30|90] - View statistics and metrics (default: 30 days)
+
+📦 Data Export:
+/export - Export all data to JSON
+/export anonymize - Export with anonymization
+/export preview - Show export preview
+
+🖥️ Multi-Server Support:
+/servers - List Discord servers with allowlist stats
+/channels [server_id] - Show channels for a server
+/bulk_allow [server_id] - Bulk add channels to allowlist
+
 ℹ️ General:
 /help - Show this help message
 /start - Welcome message
@@ -117,6 +162,7 @@ async def cmd_help(message: dict, bot: 'TelegramBot'):
 When you receive a message card:
 • Click "Ответить" to reply
 • Click "Показать больше" to load more context
+• Click template buttons for quick replies
 • Click "DND" to toggle Do Not Disturb mode
 • After typing reply, confirm before sending
 
@@ -595,6 +641,7 @@ async def cmd_settings(message: dict, bot: 'TelegramBot'):
     from ..database.connection import get_asyncpg_pool
     from ..database.dao.allowlist_dao import AllowlistDAO
     from ..services.allowlist import format_allowlist_display
+    from ..services.multiserver import MultiServerService
 
     db_pool = get_asyncpg_pool()
 
@@ -636,6 +683,19 @@ async def cmd_settings(message: dict, bot: 'TelegramBot'):
             else:
                 allowlist_display = "Empty"
 
+            # Get server management info
+            server_count = 0
+            total_allowed_channels = 0
+            try:
+                # Get total allowed channels across all servers
+                total_allowed_channels = await AllowlistDAO.count_channels(conn, platform='discord', enabled_only=True)
+
+                # Get available servers to count them
+                available_servers = await MultiServerService.get_available_servers(conn, user_id_db)
+                server_count = len(available_servers)
+            except Exception as e:
+                logger.warning(f"Error getting server management info: {e}")
+
             # Build settings text
             settings_text = f"""⚙️ Current Settings
 
@@ -654,7 +714,11 @@ Allowlist (top 5):
 
 🔔 Notifications:
   • Enabled: Yes
-  • Context Window: 10 messages"""
+  • Context Window: 10 messages
+
+🌐 Server Management:
+  • Servers cached: {server_count}
+  • Allowed channels: {total_allowed_channels} (across all servers)"""
 
             # Create action buttons keyboard
             keyboard = {
@@ -664,6 +728,10 @@ Allowlist (top 5):
                         {'text': '➖ Remove Channel', 'callback_data': 'settings_remove_channel'}
                     ],
                     [
+                        {'text': '🌐 Manage Servers', 'callback_data': 'settings_servers'},
+                        {'text': '📡 Manage Channels', 'callback_data': 'settings_channels'}
+                    ],
+                    [
                         {'text': '🔕 Toggle DND', 'callback_data': 'toggle_dnd'},
                         {'text': '🔄 Refresh', 'callback_data': 'settings_refresh'}
                     ]
@@ -671,7 +739,7 @@ Allowlist (top 5):
             }
 
             await bot.send_message(user_id, settings_text, reply_markup=keyboard)
-            logger.info(f"Settings displayed for user {user_id}, {channel_count} channels in allowlist")
+            logger.info(f"Settings displayed for user {user_id}, {channel_count} channels in allowlist, {server_count} servers cached")
 
     except Exception as e:
         logger.error(f"Error showing settings: {e}", exc_info=True)
@@ -1399,6 +1467,11 @@ async def handle_fsm_message(message: dict, bot: 'TelegramBot') -> bool:
     # Handle reply text input
     if state.startswith('awaiting_reply_'):
         await handle_reply_text_input(message, bot, state)
+        return True
+
+    # Handle edit reply text input
+    if state.startswith('awaiting_edit_text_'):
+        await handle_edit_text_input(message, bot, state)
         return True
 
     # Handle DND schedule input
@@ -2158,6 +2231,2606 @@ Allowlist (top 5):
         await bot.send_message(user_id, f"❌ Error refreshing settings: {str(e)}")
 
 
+async def callback_settings_servers(query: dict, bot: 'TelegramBot'):
+    """
+    Handle settings_servers callback.
+
+    Show list of cached servers for management.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    from ..database.connection import get_asyncpg_pool
+    from ..services.multiserver import MultiServerService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            from ..database.dao.user_dao import UserDAO
+
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(
+                    query['id'],
+                    text="❌ User not found",
+                    show_alert=True
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Get available servers
+            servers = await MultiServerService.get_available_servers(conn, user_id_db)
+
+            if not servers:
+                await bot.send_message(chat_id, "🌐 Server Management\n\nNo servers cached yet. Use Discord bot commands to cache servers.")
+                await bot.answer_callback_query(query['id'])
+                return
+
+            # Build server list text
+            servers_text = "🌐 Server Management\n\nCached Servers:\n"
+            for idx, server in enumerate(servers, 1):
+                servers_text += f"\n{idx}. {server['name']}"
+                servers_text += f"\n   • Members: {server.get('member_count', 'N/A')}"
+                servers_text += f"\n   • Allowed channels: {server.get('allowed_channels', 0)}"
+
+            await bot.send_message(chat_id, servers_text)
+            await bot.answer_callback_query(query['id'])
+            logger.info(f"User {user_id} viewed server list ({len(servers)} servers)")
+
+    except Exception as e:
+        logger.error(f"Error showing servers: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"❌ Error loading servers: {str(e)}",
+            show_alert=True
+        )
+
+
+async def callback_settings_channels(query: dict, bot: 'TelegramBot'):
+    """
+    Handle settings_channels callback.
+
+    Show server selection for channel management across different servers.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    from ..database.connection import get_asyncpg_pool
+    from ..services.multiserver import MultiServerService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            from ..database.dao.user_dao import UserDAO
+
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(
+                    query['id'],
+                    text="❌ User not found",
+                    show_alert=True
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Get allowlist summary to show channel distribution
+            summary = await MultiServerService.get_allowlist_summary(conn, user_id_db)
+
+            if not summary:
+                await bot.send_message(chat_id, "📡 Channel Management\n\nNo allowed channels configured yet. Use /allow_channel to add channels.")
+                await bot.answer_callback_query(query['id'])
+                return
+
+            # Build channel distribution text
+            channels_text = "📡 Channel Management\n\nChannel Distribution by Server:\n"
+            total_channels = 0
+            for server_id, info in summary.items():
+                channels_text += f"\n• {info['name']}"
+                channels_text += f"\n  Channels: {info['count']}"
+                total_channels += info['count']
+
+            channels_text += f"\n\nTotal allowed channels: {total_channels}"
+
+            await bot.send_message(chat_id, channels_text)
+            await bot.answer_callback_query(query['id'])
+            logger.info(f"User {user_id} viewed channel distribution ({total_channels} channels)")
+
+    except Exception as e:
+        logger.error(f"Error showing channel distribution: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"❌ Error loading channels: {str(e)}",
+            show_alert=True
+        )
+
+
+# =============================================================================
+# Edit Reply Callback Handlers
+# =============================================================================
+
+async def callback_edit_reply(query: dict, bot: 'TelegramBot'):
+    """
+    Handle edit_reply_{reply_id} callback.
+
+    Flow:
+    1. Extract reply_id from callback_data
+    2. Get user_id from query
+    3. Validate edit permission via ReplyEditorService
+    4. If allowed - set FSM state awaiting_edit_text_{reply_id}
+    5. If not - show error with reason
+    """
+    callback_data = query['data']
+    reply_id = int(callback_data.split('_')[2])  # edit_reply_123
+    user_id = query['from']['id']
+    message_id = query['message']['message_id']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            from ..services.reply_editor import ReplyEditorService
+
+            # Validate
+            validation = await ReplyEditorService.validate_edit_permission(
+                conn, reply_id, user_id
+            )
+
+            if not validation['can_edit']:
+                # Show error
+                error_reasons = {
+                    'not_found': 'Reply not found',
+                    'not_posted': 'Reply not posted yet',
+                    'time_expired': f"⏰ Edit window expired (>48h)\n\nReply was posted {validation.get('hours_since_posted', 0):.1f}h ago",
+                    'permission_denied': '🚫 You cannot edit this reply',
+                    'task_muted': 'Task is muted - cannot edit'
+                }
+                error_msg = error_reasons.get(validation['reason'], f"Cannot edit: {validation['reason']}")
+
+                await bot.answer_callback_query(
+                    query['id'],
+                    text=error_msg,
+                    show_alert=True
+                )
+                return
+
+            # Set FSM state
+            bot.set_user_state(user_id, f"awaiting_edit_text_{reply_id}", {
+                'reply_id': reply_id,
+                'original_content': validation['reply']['content'],
+                'task_id': validation['task']['id']
+            })
+
+            # Prompt for new text
+            await bot.send_message(
+                chat_id,
+                f"✏️ **Edit Reply**\n\n"
+                f"Current text:\n{validation['reply']['content'][:200]}...\n\n"
+                f"Send me the new text:",
+                parse_mode='Markdown'
+            )
+
+            await bot.answer_callback_query(query['id'])
+
+    except Exception as e:
+        logger.error(f"Error in edit_reply callback: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"Error: {str(e)}",
+            show_alert=True
+        )
+
+
+async def handle_edit_text_input(message: dict, bot: 'TelegramBot', state: str):
+    """
+    Handle awaiting_edit_text_{reply_id} FSM state.
+
+    User typed new text for edited reply.
+
+    Flow:
+    1. Get new text from message
+    2. Validate length (not empty, not too long)
+    3. Show confirmation with preview
+    4. Create temp edited reply in DB (not posted yet)
+    5. Set FSM state to awaiting_edit_confirm_{new_reply_id}
+    """
+    user_id = message['from']['id']
+    chat_id = message['chat']['id']
+    new_content = message.get('text', '')
+
+    state_data = bot.get_user_state(user_id)
+    if not state_data:
+        await bot.send_message(chat_id, "⚠️ Session expired. Please try again.")
+        return
+
+    original_reply_id = state_data['data']['reply_id']
+    original_content = state_data['data']['original_content']
+
+    # Validate new text
+    if not new_content or not new_content.strip():
+        await bot.send_message(
+            chat_id,
+            "❌ New text cannot be empty. Please send the new text:"
+        )
+        return
+
+    if len(new_content) > 2000:  # Discord limit
+        await bot.send_message(
+            chat_id,
+            "❌ Text too long (max 2000 characters). Please shorten it:"
+        )
+        return
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            # Create edited reply (not posted yet)
+            from ..database.dao.reply_dao import ReplyDAO
+            new_reply_id = await ReplyDAO.create_edited_reply(
+                conn, original_reply_id, new_content, user_id
+            )
+
+        # Show confirmation
+        from .confirmations import create_edit_confirmation
+        confirmation = create_edit_confirmation(
+            original_content, new_content, new_reply_id
+        )
+
+        await bot.send_message(
+            chat_id,
+            confirmation['text'],
+            reply_markup={'inline_keyboard': confirmation['buttons']},
+            parse_mode='Markdown'
+        )
+
+        # Update FSM
+        bot.set_user_state(user_id, f"awaiting_edit_confirm_{new_reply_id}", {
+            'new_reply_id': new_reply_id,
+            'original_reply_id': original_reply_id
+        })
+
+    except Exception as e:
+        logger.error(f"Error creating edited reply: {e}", exc_info=True)
+        await bot.send_message(chat_id, f"❌ Error: {str(e)}")
+        bot.clear_user_state(user_id)
+
+
+async def callback_confirm_edit(query: dict, bot: 'TelegramBot'):
+    """
+    Handle confirm_edit_{new_reply_id} callback.
+
+    Flow:
+    1. Get new_reply from DB
+    2. Get original reply platform_ref
+    3. Post to platform via ReplyEditorService.edit_reply()
+    4. Update card showing success
+    5. Clear FSM state
+    """
+    callback_data = query['data']
+    new_reply_id = int(callback_data.split('_')[2])  # confirm_edit_123
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            from ..services.reply_editor import ReplyEditorService
+            from ..database.dao.reply_dao import ReplyDAO
+
+            # Get new reply to find original
+            new_reply = await ReplyDAO.get_reply_by_id(conn, new_reply_id)
+            if not new_reply:
+                await bot.answer_callback_query(query['id'], text="Reply not found", show_alert=True)
+                return
+
+            original_reply_id = new_reply['edit_of']
+            new_content = new_reply['content']
+
+            # Get posters (from bot instance or create)
+            telegram_poster = bot  # bot itself has send_message
+            discord_poster = getattr(bot, 'discord_poster', None)
+
+            # Execute edit via service
+            result = await ReplyEditorService.edit_reply(
+                conn,
+                original_reply_id,
+                new_content,
+                user_id,
+                telegram_poster,
+                discord_poster
+            )
+
+            if result['success']:
+                platform = result['platform']
+                await bot.edit_message_text(
+                    chat_id,
+                    query['message']['message_id'],
+                    f"✅ **Reply edited successfully!**\n\n"
+                    f"Platform: {platform.capitalize()}\n"
+                    f"New reply ID: {result['new_reply_id']}\n\n"
+                    f"The message has been updated on {platform}.",
+                    parse_mode='Markdown'
+                )
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                error_code = result.get('error_code', 'unknown')
+
+                await bot.edit_message_text(
+                    chat_id,
+                    query['message']['message_id'],
+                    f"❌ **Edit failed**\n\n"
+                    f"Error: {error_msg}\n"
+                    f"Code: {error_code}\n\n"
+                    f"Please try again or contact support.",
+                    parse_mode='Markdown'
+                )
+
+            await bot.answer_callback_query(query['id'])
+            bot.clear_user_state(user_id)
+
+    except Exception as e:
+        logger.error(f"Error confirming edit: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"Error: {str(e)}",
+            show_alert=True
+        )
+
+
+async def callback_cancel_edit(query: dict, bot: 'TelegramBot'):
+    """
+    Handle cancel_edit_{reply_id} callback.
+
+    Flow:
+    1. Delete temp edited reply from DB (if created)
+    2. Clear FSM state
+    3. Show cancellation message
+    """
+    callback_data = query['data']
+    reply_id = int(callback_data.split('_')[2])  # cancel_edit_123
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        # Delete temp reply if exists
+        async with db_pool.acquire() as conn:
+            from ..database.dao.reply_dao import ReplyDAO
+            await ReplyDAO.delete_reply(conn, reply_id)
+
+        await bot.edit_message_text(
+            chat_id,
+            query['message']['message_id'],
+            "❌ Edit cancelled. No changes were made.",
+            parse_mode='Markdown'
+        )
+
+        await bot.answer_callback_query(query['id'], text="Edit cancelled")
+        bot.clear_user_state(user_id)
+
+    except Exception as e:
+        logger.error(f"Error cancelling edit: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text="Cancelled")
+        bot.clear_user_state(user_id)
+
+
+async def callback_show_edit_history(query: dict, bot: 'TelegramBot'):
+    """
+    Handle show_history_{reply_id} callback.
+
+    Shows all edit versions with timestamps.
+    """
+    callback_data = query['data']
+    reply_id = int(callback_data.split('_')[2])  # show_history_123
+    chat_id = query['message']['chat']['id']
+
+    try:
+        from ..database.connection import get_asyncpg_pool
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            from ..services.reply_editor import ReplyEditorService
+
+            history = await ReplyEditorService.get_edit_history(conn, reply_id)
+
+            if not history:
+                await bot.answer_callback_query(
+                    query['id'],
+                    text="No edit history found",
+                    show_alert=True
+                )
+                return
+
+            # Format history
+            lines = ["📊 **Edit History**\n"]
+            for idx, item in enumerate(history, 1):
+                status_badge = "🟢 CURRENT" if item['is_current'] else "📝 ORIGINAL" if item['is_original'] else f"✏️ EDIT #{idx-1}"
+                timestamp = item['created_at'].strftime('%Y-%m-%d %H:%M')
+
+                lines.append(
+                    f"{status_badge}\n"
+                    f"Time: {timestamp}\n"
+                    f"Text: {item['content_preview']}\n"
+                )
+
+            history_text = "\n".join(lines)
+
+            await bot.send_message(
+                chat_id,
+                history_text,
+                parse_mode='Markdown'
+            )
+
+            await bot.answer_callback_query(query['id'])
+
+    except Exception as e:
+        logger.error(f"Error showing history: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            text=f"Error: {str(e)}",
+            show_alert=True
+        )
+
+
+# =============================================================================
+# Multi-Server Support Commands
+# =============================================================================
+
+async def cmd_servers(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /servers command.
+
+    List available Discord servers with allowlist counts.
+    Shows cached servers with statistics about allowed channels.
+    """
+    user_id = message['from']['id']
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.multiserver import MultiServerService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Get available servers
+            servers = await MultiServerService.get_available_servers(conn, user_id_db)
+
+            if not servers:
+                text = """ℹ️ **No Discord servers cached**
+
+No servers found in cache. This could mean:
+• Discord connection not set up yet
+• Server cache needs to be refreshed
+
+💡 Use /setup_discord to configure your Discord connection, then use the Refresh Cache button below."""
+
+                keyboard = {
+                    'inline_keyboard': [
+                        [{'text': '🔄 Refresh Cache', 'callback_data': 'servers_refresh'}]
+                    ]
+                }
+
+                await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+                logger.info(f"No servers cached for user {user_id}")
+                return
+
+            # Build server list message
+            text = f"🖥️ **Discord Servers** ({len(servers)} total)\n\n"
+
+            keyboard_rows = []
+
+            for server in servers:
+                server_name = server.get('name', 'Unknown Server')
+                server_id = server.get('server_id')
+                allowed_count = server.get('allowed_channels', 0)
+                member_count = server.get('member_count', 0)
+
+                text += f"**{server_name}**\n"
+                text += f"└ Allowed channels: {allowed_count}\n"
+                text += f"└ Members: {member_count}\n"
+                text += f"└ ID: `{server_id}`\n\n"
+
+                # Add button to view channels
+                keyboard_rows.append([{
+                    'text': f"📋 {server_name[:30]} ({allowed_count} allowed)",
+                    'callback_data': f'server_select_{server_id}'
+                }])
+
+            # Add refresh button at the bottom
+            keyboard_rows.append([{
+                'text': '🔄 Refresh Cache',
+                'callback_data': 'servers_refresh'
+            }])
+
+            keyboard = {'inline_keyboard': keyboard_rows}
+
+            await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+            logger.info(f"Showed {len(servers)} servers to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in cmd_servers: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error loading servers: {str(e)}")
+
+
+async def cmd_channels(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /channels command.
+
+    Usage: /channels or /channels <server_id>
+
+    If no server_id provided, show server selection buttons.
+    If server_id provided, show channels for that server with allowlist status.
+    """
+    user_id = message['from']['id']
+    text = message.get('text', '')
+    parts = text.split()
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.multiserver import MultiServerService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Check if server_id was provided
+            if len(parts) == 2:
+                server_id = parts[1]
+                await _show_server_channels(user_id, server_id, user_id_db, bot, conn)
+            elif len(parts) == 1:
+                # No server_id provided, show server selection
+                servers = await MultiServerService.get_available_servers(conn, user_id_db)
+
+                if not servers:
+                    await bot.send_message(
+                        user_id,
+                        "ℹ️ No servers cached. Use /servers to view and cache servers first."
+                    )
+                    return
+
+                text = "📋 **Select Server to View Channels**\n\n"
+                text += "Choose a server from the list below:\n\n"
+
+                keyboard_rows = []
+
+                for server in servers:
+                    server_name = server.get('name', 'Unknown Server')
+                    server_id = server.get('server_id')
+                    allowed_count = server.get('allowed_channels', 0)
+
+                    keyboard_rows.append([{
+                        'text': f"📋 {server_name[:35]} ({allowed_count} allowed)",
+                        'callback_data': f'server_select_{server_id}'
+                    }])
+
+                keyboard = {'inline_keyboard': keyboard_rows}
+
+                await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+                logger.info(f"Showed server selection to user {user_id}")
+            else:
+                error_text = """❌ Invalid usage
+
+Usage:
+• /channels - Show server selection
+• /channels <server_id> - Show channels for specific server
+
+Example:
+/channels 123456789012345678"""
+
+                await bot.send_message(user_id, error_text)
+
+    except Exception as e:
+        logger.error(f"Error in cmd_channels: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error: {str(e)}")
+
+
+async def cmd_bulk_allow(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /bulk_allow command.
+
+    Usage: /bulk_allow <server_id>
+
+    If no server_id provided, show server selection.
+    Shows multi-select interface for channels with bulk add functionality.
+    """
+    user_id = message['from']['id']
+    text = message.get('text', '')
+    parts = text.split()
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.multiserver import MultiServerService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Check if server_id was provided
+            if len(parts) == 2:
+                server_id = parts[1]
+                await _show_bulk_allow_selection(user_id, server_id, user_id_db, bot, conn)
+            elif len(parts) == 1:
+                # No server_id provided, show server selection
+                servers = await MultiServerService.get_available_servers(conn, user_id_db)
+
+                if not servers:
+                    await bot.send_message(
+                        user_id,
+                        "ℹ️ No servers cached. Use /servers to view and cache servers first."
+                    )
+                    return
+
+                text = "➕ **Select Server for Bulk Allow**\n\n"
+                text += "Choose a server to add multiple channels to allowlist:\n\n"
+
+                keyboard_rows = []
+
+                for server in servers:
+                    server_name = server.get('name', 'Unknown Server')
+                    server_id = server.get('server_id')
+
+                    keyboard_rows.append([{
+                        'text': f"➕ {server_name[:40]}",
+                        'callback_data': f'bulk_select_server_{server_id}'
+                    }])
+
+                keyboard = {'inline_keyboard': keyboard_rows}
+
+                await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+                logger.info(f"Showed bulk allow server selection to user {user_id}")
+            else:
+                error_text = """❌ Invalid usage
+
+Usage:
+• /bulk_allow - Show server selection
+• /bulk_allow <server_id> - Start bulk selection for specific server
+
+Example:
+/bulk_allow 123456789012345678"""
+
+                await bot.send_message(user_id, error_text)
+
+    except Exception as e:
+        logger.error(f"Error in cmd_bulk_allow: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error: {str(e)}")
+
+
+async def cmd_search(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /search command.
+
+    Searches message history with advanced filters and pagination.
+    Usage: /search <query>
+    Example: /search hello author:john from:2025-11-01
+    """
+    user_id = message['from']['id']
+    text = message.get('text', '')
+
+    # Extract query (remove /search command)
+    parts = text.split(maxsplit=1)
+    query_string = parts[1] if len(parts) > 1 else ''
+
+    # If no query provided, show help
+    if not query_string.strip():
+        from .cards import format_search_help_card
+        help_text = format_search_help_card()
+        keyboard = {
+            'inline_keyboard': [[
+                {'text': '🔍 Try Example Search', 'callback_data': 'search_example'}
+            ]]
+        }
+        await bot.send_message(user_id, help_text, reply_markup=keyboard)
+        logger.info(f"Showed search help to user {user_id}")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Execute search (page 1)
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                query_string,
+                page=1,
+                results_per_page=10
+            )
+
+            # Store search state in bot for pagination
+            bot.set_search_state(user_id, {
+                'query_string': query_string,
+                'current_page': 1
+            })
+
+            # Format results
+            card = format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=query_string
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=query_string,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            await bot.send_message(user_id, card, reply_markup=keyboard)
+            logger.info(f"Executed search for user {user_id}: '{query_string}' - {search_result['total_count']} results")
+
+    except Exception as e:
+        logger.error(f"Error in cmd_search: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Search error: {str(e)}\n\nUse /search_help for syntax help.")
+
+
+async def cmd_search_help(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /search_help command.
+
+    Shows search syntax help and examples.
+    """
+    user_id = message['from']['id']
+
+    from .cards import format_search_help_card
+
+    help_text = format_search_help_card()
+    keyboard = {
+        'inline_keyboard': [[
+            {'text': '🔍 Try Example Search', 'callback_data': 'search_example'}
+        ]]
+    }
+
+    await bot.send_message(user_id, help_text, reply_markup=keyboard)
+    logger.info(f"Showed search help to user {user_id}")
+
+
+async def cmd_stats(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /stats command.
+
+    Shows comprehensive statistics and metrics for the user.
+    Usage: /stats [7|30|90] - Optional period in days (default: 30)
+    """
+    user_id = message['from']['id']
+
+    # Parse period from command arguments
+    period_days = 30  # Default
+    text = message.get('text', '').strip()
+    parts = text.split()
+
+    if len(parts) > 1:
+        try:
+            period_days = int(parts[1])
+            # Validate period
+            if period_days not in [7, 30, 90]:
+                await bot.send_message(
+                    user_id,
+                    "❌ Invalid period. Please use 7, 30, or 90 days.\n\nExample: /stats 30"
+                )
+                return
+        except ValueError:
+            await bot.send_message(
+                user_id,
+                "❌ Invalid period format. Please use a number (7, 30, or 90).\n\nExample: /stats 30"
+            )
+            return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.stats import StatsService
+    from .cards import format_stats_card, create_stats_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    # Send "generating" message
+    status_msg = await bot.send_message(
+        user_id,
+        f"📊 Generating statistics for the last {period_days} days...\n\nPlease wait..."
+    )
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.edit_message_text(
+                    user_id,
+                    status_msg['message_id'],
+                    "❌ User not found. Please use /start to initialize."
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Generate statistics report
+            stats = await StatsService.generate_stats_report(conn, user_id_db, period_days)
+
+            # Format the stats card
+            card_text = format_stats_card(stats, period_days)
+            keyboard = create_stats_keyboard(period_days)
+
+            # Update message with stats
+            await bot.edit_message_text(
+                user_id,
+                status_msg['message_id'],
+                card_text,
+                reply_markup=keyboard
+            )
+
+            logger.info(f"Showed statistics to user {user_id} (period: {period_days} days)")
+
+    except Exception as e:
+        logger.error(f"Error generating stats for user {user_id}: {e}", exc_info=True)
+        await bot.edit_message_text(
+            user_id,
+            status_msg['message_id'],
+            f"❌ Error generating statistics: {str(e)}\n\nPlease try again later."
+        )
+
+
+async def cmd_export(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /export command.
+
+    Exports all user data to JSON format.
+    Usage:
+    - /export - Export all data
+    - /export anonymize - Export with anonymization
+    - /export preview - Show export preview without exporting
+    """
+    user_id = message['from']['id']
+
+    # Parse command arguments
+    text = message.get('text', '').strip()
+    parts = text.split()
+
+    anonymize = False
+    preview_only = False
+
+    if len(parts) > 1:
+        arg = parts[1].lower()
+        if arg == 'anonymize':
+            anonymize = True
+        elif arg == 'preview':
+            preview_only = True
+        else:
+            await bot.send_message(
+                user_id,
+                "❌ Invalid argument.\n\n"
+                "Usage:\n"
+                "• /export - Export all data\n"
+                "• /export anonymize - Export with anonymization\n"
+                "• /export preview - Show export preview"
+            )
+            return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.export import ExportService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(
+                    user_id,
+                    "❌ User not found. Please use /start to initialize."
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Initialize export service
+            export_service = ExportService()
+
+            # Handle preview request
+            if preview_only:
+                preview = await export_service.get_export_preview(conn, user_id_db)
+                await bot.send_message(user_id, preview)
+                logger.info(f"Showed export preview to user {user_id}")
+                return
+
+            # Send progress message
+            anonymize_text = " (anonymized)" if anonymize else ""
+            status_msg = await bot.send_message(
+                user_id,
+                f"📦 Preparing export{anonymize_text}...\n\nThis may take a moment."
+            )
+
+            # Create export file
+            file_path, filename = await export_service.create_export_file(
+                conn,
+                user_id_db,
+                anonymize=anonymize,
+                include_llm_requests=False  # Optional, can be made configurable
+            )
+
+            # Update status
+            await bot.edit_message_text(
+                user_id,
+                status_msg['message_id'],
+                f"📤 Uploading export file{anonymize_text}..."
+            )
+
+            # Send file
+            caption = f"📦 Data Export{anonymize_text}\n\nGenerated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+
+            try:
+                with open(file_path, 'rb') as f:
+                    await bot.send_document(
+                        chat_id=user_id,
+                        document=f,
+                        filename=filename,
+                        caption=caption
+                    )
+
+                # Delete progress message
+                await bot.delete_message(user_id, status_msg['message_id'])
+
+                logger.info(f"Export sent to user {user_id} (anonymize={anonymize})")
+
+            finally:
+                # Cleanup export file
+                ExportService.cleanup_export_file(file_path)
+
+    except Exception as e:
+        logger.error(f"Error exporting data for user {user_id}: {e}", exc_info=True)
+        await bot.send_message(
+            user_id,
+            f"❌ Error exporting data: {str(e)}\n\nPlease try again later."
+        )
+
+
+# =============================================================================
+# Multi-Server Support Callback Handlers
+# =============================================================================
+
+async def callback_servers_refresh(query: dict, bot: 'TelegramBot'):
+    """
+    Handle servers_refresh callback.
+
+    Refresh server cache using DiscordCacheService.
+    Shows progress message and updates with refreshed server list.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..database.dao.discord_dao import DiscordDAO
+    from ..services.discord_cache import DiscordCacheService
+    from ..services.multiserver import MultiServerService
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        # Show progress message
+        await bot.edit_message_text(
+            chat_id,
+            message_id,
+            "🔄 **Refreshing server cache...**\n\nFetching servers from Discord API...",
+            parse_mode='Markdown'
+        )
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ User not found. Use /start first."
+                )
+                return
+
+            user_id_db = user['id']
+
+            # Get Discord token
+            discord_conn = await DiscordDAO.get_discord_connection(conn, user_id_db)
+            if not discord_conn:
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ No Discord connection configured.\nUse /setup_discord to configure."
+                )
+                return
+
+            discord_token = discord_conn.get('token')
+            if not discord_token:
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    "❌ Discord token not found.\nUse /setup_discord to configure."
+                )
+                return
+
+            # Refresh cache
+            try:
+                cached_count = await DiscordCacheService.refresh_server_cache(conn, discord_token)
+
+                # Get updated servers
+                servers = await MultiServerService.get_available_servers(conn, user_id_db)
+
+                # Build updated message
+                text = f"✅ **Cache refreshed successfully!**\n\n"
+                text += f"🖥️ **Discord Servers** ({len(servers)} total)\n\n"
+
+                keyboard_rows = []
+
+                for server in servers:
+                    server_name = server.get('name', 'Unknown Server')
+                    server_id = server.get('server_id')
+                    allowed_count = server.get('allowed_channels', 0)
+                    member_count = server.get('member_count', 0)
+
+                    text += f"**{server_name}**\n"
+                    text += f"└ Allowed channels: {allowed_count}\n"
+                    text += f"└ Members: {member_count}\n"
+                    text += f"└ ID: `{server_id}`\n\n"
+
+                    keyboard_rows.append([{
+                        'text': f"📋 {server_name[:30]} ({allowed_count} allowed)",
+                        'callback_data': f'server_select_{server_id}'
+                    }])
+
+                keyboard_rows.append([{
+                    'text': '🔄 Refresh Cache',
+                    'callback_data': 'servers_refresh'
+                }])
+
+                keyboard = {'inline_keyboard': keyboard_rows}
+
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    text,
+                    reply_markup=keyboard,
+                    parse_mode='Markdown'
+                )
+
+                await bot.answer_callback_query(query['id'], text=f"Cached {cached_count} servers!")
+                logger.info(f"Refreshed cache for user {user_id}: {cached_count} servers")
+
+            except Exception as cache_error:
+                logger.error(f"Error refreshing cache: {cache_error}", exc_info=True)
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"❌ **Cache refresh failed**\n\n"
+                    f"Error: {str(cache_error)}\n\n"
+                    f"Please check your Discord connection and try again.",
+                    parse_mode='Markdown'
+                )
+                await bot.answer_callback_query(query['id'], text="Refresh failed", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Error in callback_servers_refresh: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text=f"Error: {str(e)}", show_alert=True)
+
+
+async def callback_server_select(query: dict, bot: 'TelegramBot'):
+    """
+    Handle server_select_{server_id} callback.
+
+    Extract server_id from callback_data and show channels for selected server.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+
+    try:
+        # Extract server_id from callback data (format: server_select_{id})
+        server_id = data.split('_', 2)[2]
+
+        from ..database.connection import get_asyncpg_pool
+        from ..database.dao.user_dao import UserDAO
+
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], text="User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            await _show_server_channels(user_id, server_id, user_id_db, bot, conn)
+            await bot.answer_callback_query(query['id'])
+
+    except Exception as e:
+        logger.error(f"Error in callback_server_select: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text=f"Error: {str(e)}", show_alert=True)
+
+
+async def callback_channel_toggle(query: dict, bot: 'TelegramBot'):
+    """
+    Handle channel_toggle_{server_id}_{channel_id} callback.
+
+    Toggle channel allowlist status. Add if not in allowlist, remove if already in.
+    Updates button state and shows confirmation message.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    try:
+        # Extract server_id and channel_id from callback data
+        # Format: channel_toggle_{server_id}_{channel_id}
+        parts = data.split('_', 2)
+        if len(parts) != 3:
+            await bot.answer_callback_query(query['id'], text="Invalid callback data", show_alert=True)
+            return
+
+        ids = parts[2].split('_', 1)
+        if len(ids) != 2:
+            await bot.answer_callback_query(query['id'], text="Invalid callback data", show_alert=True)
+            return
+
+        server_id = ids[0]
+        channel_id = ids[1]
+
+        from ..database.connection import get_asyncpg_pool
+        from ..database.dao.user_dao import UserDAO
+        from ..database.dao.allowlist_dao import AllowlistDAO
+
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], text="User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Check current allowlist status
+            is_allowed = await AllowlistDAO.is_channel_allowed(
+                conn,
+                user_id_db,
+                channel_id,
+                platform='discord'
+            )
+
+            if is_allowed:
+                # Remove from allowlist
+                await AllowlistDAO.remove_channel(
+                    conn,
+                    user_id_db,
+                    channel_id,
+                    platform='discord'
+                )
+                action = "removed from"
+                logger.info(f"User {user_id} removed channel {channel_id} from allowlist")
+            else:
+                # Add to allowlist
+                await AllowlistDAO.add_channel(
+                    conn,
+                    user_id_db,
+                    server_id,
+                    channel_id,
+                    platform='discord'
+                )
+                action = "added to"
+                logger.info(f"User {user_id} added channel {channel_id} to allowlist")
+
+            # Refresh the channel list to update button states
+            await _show_server_channels(user_id, server_id, user_id_db, bot, conn, edit_message_id=message_id)
+
+            await bot.answer_callback_query(
+                query['id'],
+                text=f"Channel {action} allowlist!",
+                show_alert=False
+            )
+
+    except Exception as e:
+        logger.error(f"Error in callback_channel_toggle: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text=f"Error: {str(e)}", show_alert=True)
+
+
+async def callback_bulk_select_server(query: dict, bot: 'TelegramBot'):
+    """
+    Handle bulk_select_server_{server_id} callback.
+
+    Start bulk selection for a server. Initialize FSM state with empty selection
+    and show channel list with checkboxes.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+
+    try:
+        # Extract server_id from callback data
+        server_id = data.split('_', 3)[3]
+
+        from ..database.connection import get_asyncpg_pool
+        from ..database.dao.user_dao import UserDAO
+
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], text="User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Initialize FSM state with empty selection
+            bot.set_user_state(user_id, 'bulk_allow_selection', {
+                'server_id': server_id,
+                'selected_channels': []
+            })
+
+            await _show_bulk_allow_selection(user_id, server_id, user_id_db, bot, conn)
+            await bot.answer_callback_query(query['id'])
+
+    except Exception as e:
+        logger.error(f"Error in callback_bulk_select_server: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text=f"Error: {str(e)}", show_alert=True)
+
+
+async def callback_bulk_toggle_channel(query: dict, bot: 'TelegramBot'):
+    """
+    Handle bulk_toggle_{server_id}_{channel_id} callback.
+
+    Toggle channel in bulk selection. Update FSM state and refresh checkbox display.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    try:
+        # Extract server_id and channel_id from callback data
+        # Format: bulk_toggle_{server_id}_{channel_id}
+        parts = data.split('_', 2)
+        if len(parts) != 3:
+            await bot.answer_callback_query(query['id'], text="Invalid callback data", show_alert=True)
+            return
+
+        ids = parts[2].split('_', 1)
+        if len(ids) != 2:
+            await bot.answer_callback_query(query['id'], text="Invalid callback data", show_alert=True)
+            return
+
+        server_id = ids[0]
+        channel_id = ids[1]
+
+        # Get current FSM state
+        state = bot.get_user_state(user_id)
+
+        if not state or state.get('state') != 'bulk_allow_selection':
+            await bot.answer_callback_query(
+                query['id'],
+                text="Session expired. Please start again.",
+                show_alert=True
+            )
+            return
+
+        state_data = state.get('data', {})
+        selected_channels = state_data.get('selected_channels', [])
+
+        # Toggle channel in selection
+        if channel_id in selected_channels:
+            selected_channels.remove(channel_id)
+        else:
+            selected_channels.append(channel_id)
+
+        # Update FSM state
+        bot.set_user_state(user_id, 'bulk_allow_selection', {
+            'server_id': server_id,
+            'selected_channels': selected_channels
+        })
+
+        # Refresh display
+        from ..database.connection import get_asyncpg_pool
+        from ..database.dao.user_dao import UserDAO
+
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], text="User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            await _show_bulk_allow_selection(
+                user_id,
+                server_id,
+                user_id_db,
+                bot,
+                conn,
+                edit_message_id=message_id
+            )
+
+            await bot.answer_callback_query(
+                query['id'],
+                text=f"Selected: {len(selected_channels)} channels"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in callback_bulk_toggle_channel: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text=f"Error: {str(e)}", show_alert=True)
+
+
+async def callback_bulk_confirm(query: dict, bot: 'TelegramBot'):
+    """
+    Handle bulk_confirm_{server_id} callback.
+
+    Get selected channels from FSM state and add them to allowlist using
+    MultiServerService.bulk_add_to_allowlist(). Show success message and clear state.
+    """
+    user_id = query['from']['id']
+    data = query['data']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    try:
+        # Extract server_id from callback data
+        server_id = data.split('_', 2)[2]
+
+        # Get current FSM state
+        state = bot.get_user_state(user_id)
+
+        if not state or state.get('state') != 'bulk_allow_selection':
+            await bot.answer_callback_query(
+                query['id'],
+                text="Session expired. Please start again.",
+                show_alert=True
+            )
+            return
+
+        state_data = state.get('data', {})
+        selected_channels = state_data.get('selected_channels', [])
+
+        if not selected_channels:
+            await bot.answer_callback_query(
+                query['id'],
+                text="No channels selected!",
+                show_alert=True
+            )
+            return
+
+        from ..database.connection import get_asyncpg_pool
+        from ..database.dao.user_dao import UserDAO
+        from ..services.multiserver import MultiServerService
+        from ..services.discord_cache import DiscordCacheService
+
+        db_pool = get_asyncpg_pool()
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], text="User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Get server name for display
+            server_name = await DiscordCacheService.get_server_display_name(conn, server_id)
+
+            # Bulk add to allowlist
+            try:
+                count = await MultiServerService.bulk_add_to_allowlist(
+                    conn,
+                    user_id_db,
+                    server_id,
+                    selected_channels
+                )
+
+                success_text = f"""✅ **Bulk Add Successful!**
+
+Added **{count}** channels to allowlist for server **{server_name}**
+
+You will now receive messages from these channels."""
+
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    success_text,
+                    parse_mode='Markdown'
+                )
+
+                await bot.answer_callback_query(
+                    query['id'],
+                    text=f"Added {count} channels!",
+                    show_alert=False
+                )
+
+                logger.info(f"User {user_id} bulk added {count} channels to allowlist for server {server_id}")
+
+                # Clear FSM state
+                bot.clear_user_state(user_id)
+
+            except ValueError as ve:
+                logger.error(f"Validation error in bulk add: {ve}")
+                await bot.edit_message_text(
+                    chat_id,
+                    message_id,
+                    f"❌ **Validation Error**\n\n{str(ve)}"
+                )
+                await bot.answer_callback_query(query['id'], text="Validation failed", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Error in callback_bulk_confirm: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text=f"Error: {str(e)}", show_alert=True)
+
+
+async def callback_bulk_cancel(query: dict, bot: 'TelegramBot'):
+    """
+    Handle bulk_cancel callback.
+
+    Clear FSM state and show cancellation message.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    try:
+        # Clear FSM state
+        bot.clear_user_state(user_id)
+
+        await bot.edit_message_text(
+            chat_id,
+            message_id,
+            "❌ Bulk allow operation cancelled. No changes were made."
+        )
+
+        await bot.answer_callback_query(query['id'], text="Cancelled")
+        logger.info(f"User {user_id} cancelled bulk allow operation")
+
+    except Exception as e:
+        logger.error(f"Error in callback_bulk_cancel: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], text="Cancelled")
+
+
+# =============================================================================
+# Multi-Server Support Helper Functions
+# =============================================================================
+
+async def _show_server_channels(
+    user_id: int,
+    server_id: str,
+    user_id_db: int,
+    bot: 'TelegramBot',
+    conn,
+    edit_message_id: int = None
+):
+    """
+    Show channels for a specific server with allowlist toggle buttons.
+
+    Args:
+        user_id: Telegram user ID
+        server_id: Discord server ID
+        user_id_db: Database user ID
+        bot: TelegramBot instance
+        conn: Database connection
+        edit_message_id: If provided, edit existing message instead of sending new one
+    """
+    from ..services.multiserver import MultiServerService
+    from ..services.discord_cache import DiscordCacheService
+    from ..database.dao.allowlist_dao import AllowlistDAO
+
+    try:
+        # Get server name
+        server_name = await DiscordCacheService.get_server_display_name(conn, server_id)
+
+        # Get channels for server
+        channels = await MultiServerService.get_server_channels(conn, server_id, channel_type='text')
+
+        if not channels:
+            text = f"ℹ️ No text channels found for server **{server_name}**\n\n"
+            text += "This could mean the cache needs to be refreshed."
+
+            if edit_message_id:
+                await bot.edit_message_text(user_id, edit_message_id, text, parse_mode='Markdown')
+            else:
+                await bot.send_message(user_id, text, parse_mode='Markdown')
+            return
+
+        # Get allowlist status for all channels
+        allowlist_channel_ids = set()
+        all_allowed = await AllowlistDAO.get_all_channels(conn, platform='discord', enabled_only=True)
+        for ch in all_allowed:
+            if ch.get('server_id') == server_id:
+                allowlist_channel_ids.add(ch.get('channel_id'))
+
+        # Build message
+        text = f"📋 **Channels for {server_name}**\n\n"
+        text += f"Total channels: {len(channels)}\n"
+        text += f"Allowed: {len(allowlist_channel_ids)}\n\n"
+
+        # Pagination: show first 20 channels
+        display_channels = channels[:20]
+        keyboard_rows = []
+
+        for channel in display_channels:
+            channel_name = channel.get('name', 'unknown')
+            channel_id = channel.get('channel_id')
+            channel_type = channel.get('type', 'text')
+
+            # Check if channel is in allowlist
+            is_allowed = channel_id in allowlist_channel_ids
+            status_emoji = "✅" if is_allowed else "❌"
+
+            text += f"{status_emoji} **#{channel_name}** ({channel_type})\n"
+
+            # Add toggle button
+            button_text = f"{'✅' if is_allowed else '➕'} #{channel_name[:25]}"
+            keyboard_rows.append([{
+                'text': button_text,
+                'callback_data': f'channel_toggle_{server_id}_{channel_id}'
+            }])
+
+        if len(channels) > 20:
+            text += f"\n... and {len(channels) - 20} more channel(s)\n"
+
+        keyboard = {'inline_keyboard': keyboard_rows}
+
+        if edit_message_id:
+            await bot.edit_message_text(
+                user_id,
+                edit_message_id,
+                text,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+        else:
+            await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+
+        logger.info(f"Showed {len(display_channels)} channels for server {server_id} to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error showing server channels: {e}", exc_info=True)
+        error_text = f"❌ Error loading channels: {str(e)}"
+
+        if edit_message_id:
+            await bot.edit_message_text(user_id, edit_message_id, error_text)
+        else:
+            await bot.send_message(user_id, error_text)
+
+
+async def _show_bulk_allow_selection(
+    user_id: int,
+    server_id: str,
+    user_id_db: int,
+    bot: 'TelegramBot',
+    conn,
+    edit_message_id: int = None
+):
+    """
+    Show bulk selection interface for channels.
+
+    Args:
+        user_id: Telegram user ID
+        server_id: Discord server ID
+        user_id_db: Database user ID
+        bot: TelegramBot instance
+        conn: Database connection
+        edit_message_id: If provided, edit existing message instead of sending new one
+    """
+    from ..services.multiserver import MultiServerService
+    from ..services.discord_cache import DiscordCacheService
+    from ..database.dao.allowlist_dao import AllowlistDAO
+
+    try:
+        # Get current selection from FSM state
+        state = bot.get_user_state(user_id)
+        selected_channels = []
+
+        if state and state.get('state') == 'bulk_allow_selection':
+            state_data = state.get('data', {})
+            selected_channels = state_data.get('selected_channels', [])
+
+        # Get server name
+        server_name = await DiscordCacheService.get_server_display_name(conn, server_id)
+
+        # Get channels for server (exclude already allowed channels)
+        channels = await MultiServerService.get_server_channels(conn, server_id, channel_type='text')
+
+        # Get already allowed channels
+        allowlist_channel_ids = set()
+        all_allowed = await AllowlistDAO.get_all_channels(conn, platform='discord', enabled_only=True)
+        for ch in all_allowed:
+            if ch.get('server_id') == server_id:
+                allowlist_channel_ids.add(ch.get('channel_id'))
+
+        # Filter out already allowed channels
+        available_channels = [ch for ch in channels if ch.get('channel_id') not in allowlist_channel_ids]
+
+        if not available_channels:
+            text = f"ℹ️ **No channels available for bulk add**\n\n"
+            text += f"Server: **{server_name}**\n\n"
+            text += "All text channels are already in the allowlist!"
+
+            if edit_message_id:
+                await bot.edit_message_text(user_id, edit_message_id, text, parse_mode='Markdown')
+            else:
+                await bot.send_message(user_id, text, parse_mode='Markdown')
+            return
+
+        # Build message
+        text = f"➕ **Bulk Allow Channels**\n\n"
+        text += f"Server: **{server_name}**\n"
+        text += f"Selected: **{len(selected_channels)}** / {len(available_channels)}\n\n"
+        text += "Tap channels to toggle selection:\n\n"
+
+        # Pagination: show first 15 channels
+        display_channels = available_channels[:15]
+        keyboard_rows = []
+
+        for channel in display_channels:
+            channel_name = channel.get('name', 'unknown')
+            channel_id = channel.get('channel_id')
+
+            # Check if channel is selected
+            is_selected = channel_id in selected_channels
+            checkbox = "☑️" if is_selected else "⬜"
+
+            button_text = f"{checkbox} #{channel_name[:30]}"
+            keyboard_rows.append([{
+                'text': button_text,
+                'callback_data': f'bulk_toggle_{server_id}_{channel_id}'
+            }])
+
+        if len(available_channels) > 15:
+            text += f"\n(Showing first 15 of {len(available_channels)} channels)\n"
+
+        # Add action buttons
+        action_row = []
+
+        if len(available_channels) <= 15:
+            # Only show select all if all channels are visible
+            if len(selected_channels) < len(available_channels):
+                action_row.append({
+                    'text': '☑️ Select All',
+                    'callback_data': f'bulk_select_all_{server_id}'
+                })
+
+            if selected_channels:
+                action_row.append({
+                    'text': '⬜ Deselect All',
+                    'callback_data': f'bulk_deselect_all_{server_id}'
+                })
+
+        if action_row:
+            keyboard_rows.append(action_row)
+
+        # Add confirm and cancel buttons
+        bottom_row = []
+
+        if selected_channels:
+            bottom_row.append({
+                'text': f'✅ Add {len(selected_channels)} to Allowlist',
+                'callback_data': f'bulk_confirm_{server_id}'
+            })
+
+        bottom_row.append({
+            'text': '❌ Cancel',
+            'callback_data': 'bulk_cancel'
+        })
+
+        keyboard_rows.append(bottom_row)
+
+        keyboard = {'inline_keyboard': keyboard_rows}
+
+        if edit_message_id:
+            await bot.edit_message_text(
+                user_id,
+                edit_message_id,
+                text,
+                reply_markup=keyboard,
+                parse_mode='Markdown'
+            )
+        else:
+            await bot.send_message(user_id, text, reply_markup=keyboard, parse_mode='Markdown')
+
+        logger.info(f"Showed bulk allow selection for server {server_id} to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error showing bulk allow selection: {e}", exc_info=True)
+        error_text = f"❌ Error loading channels: {str(e)}"
+
+        if edit_message_id:
+            await bot.edit_message_text(user_id, edit_message_id, error_text)
+        else:
+            await bot.send_message(user_id, error_text)
+
+
+# =============================================================================
+# Search Callback Handlers
+# =============================================================================
+
+async def callback_search_page(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_page_{page} callback for search result pagination.
+
+    Updates the search results message with the requested page.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+    callback_data = query['data']
+
+    # Extract page number from callback_data (format: search_page_2)
+    try:
+        page = int(callback_data.split('_')[-1])
+    except (ValueError, IndexError):
+        await bot.answer_callback_query(query['id'], "❌ Invalid page number")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        # Get search state from bot
+        search_state = bot.get_search_state(user_id)
+        if not search_state or 'query_string' not in search_state:
+            await bot.answer_callback_query(
+                query['id'],
+                "⚠️ Search session expired. Please start a new search with /search",
+                show_alert=True
+            )
+            return
+
+        query_string = search_state['query_string']
+
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found")
+                return
+
+            user_id_db = user['id']
+
+            # Execute search for requested page
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                query_string,
+                page=page,
+                results_per_page=10
+            )
+
+            # Update search state
+            bot.set_search_state(user_id, {
+                'query_string': query_string,
+                'current_page': page
+            })
+
+            # Format results
+            card = format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=query_string
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=query_string,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            # Update message
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card,
+                reply_markup=keyboard
+            )
+
+            await bot.answer_callback_query(query['id'], f"📄 Page {page}")
+            logger.info(f"Showed search page {page} to user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_search_page: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], "❌ Error loading page", show_alert=True)
+
+
+async def callback_search_new(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_new callback to start a new search.
+
+    Shows search help to prompt user to enter a new query.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    from .cards import format_search_help_card
+
+    help_text = format_search_help_card()
+    help_text += "\n\n💡 Type /search <your query> to start a new search"
+
+    keyboard = {
+        'inline_keyboard': [[
+            {'text': '🔍 Try Example Search', 'callback_data': 'search_example'}
+        ]]
+    }
+
+    await bot.edit_message_text(
+        chat_id,
+        message_id,
+        help_text,
+        reply_markup=keyboard
+    )
+
+    await bot.answer_callback_query(query['id'], "Type /search <query> to start new search")
+    logger.info(f"User {user_id} requested new search")
+
+
+async def callback_search_help(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_help callback to show search syntax help.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    from .cards import format_search_help_card
+
+    help_text = format_search_help_card()
+
+    keyboard = {
+        'inline_keyboard': [
+            [{'text': '🔍 Try Example Search', 'callback_data': 'search_example'}],
+            [{'text': '🔙 Back to Results', 'callback_data': 'search_back'}]
+        ]
+    }
+
+    await bot.edit_message_text(
+        chat_id,
+        message_id,
+        help_text,
+        reply_markup=keyboard
+    )
+
+    await bot.answer_callback_query(query['id'], "Search help")
+    logger.info(f"Showed search help to user {user_id}")
+
+
+async def callback_search_example(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_example callback to run an example search.
+
+    Demonstrates search functionality with a sample query.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    # Example search query - searches for messages from last 30 days
+    from datetime import date, timedelta
+    date_from = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')
+    example_query = f"from:{date_from}"
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found")
+                return
+
+            user_id_db = user['id']
+
+            # Execute example search
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                example_query,
+                page=1,
+                results_per_page=10
+            )
+
+            # Store search state
+            bot.set_search_state(user_id, {
+                'query_string': example_query,
+                'current_page': 1
+            })
+
+            # Format results
+            card = "🔍 **Example Search**\n"
+            card += f"Query: `{example_query}`\n"
+            card += "(Messages from last 30 days)\n\n"
+            card += format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=example_query
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=example_query,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card,
+                reply_markup=keyboard
+            )
+
+            await bot.answer_callback_query(query['id'], "Running example search...")
+            logger.info(f"Ran example search for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_search_example: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], "❌ Error running example", show_alert=True)
+
+
+async def callback_search_back(query: dict, bot: 'TelegramBot'):
+    """
+    Handle search_back callback to return to previous search results.
+
+    Restores the last search results page.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+
+    # Get search state
+    search_state = bot.get_search_state(user_id)
+    if not search_state or 'query_string' not in search_state:
+        await bot.answer_callback_query(
+            query['id'],
+            "⚠️ No previous search found. Use /search to start a new search",
+            show_alert=True
+        )
+        return
+
+    query_string = search_state['query_string']
+    page = search_state.get('current_page', 1)
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.search import SearchService
+    from .cards import format_search_results, create_search_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found")
+                return
+
+            user_id_db = user['id']
+
+            # Re-execute search
+            search_result = await SearchService.execute_search(
+                conn,
+                user_id_db,
+                query_string,
+                page=page,
+                results_per_page=10
+            )
+
+            # Format results
+            card = format_search_results(
+                results=search_result['results'],
+                page=search_result['page'],
+                total_results=search_result['total_count'],
+                total_pages=search_result['total_pages'],
+                filters=search_result['filters'],
+                query_string=query_string
+            )
+
+            # Create keyboard
+            keyboard = create_search_keyboard(
+                query_string=query_string,
+                page=search_result['page'],
+                total_pages=search_result['total_pages'],
+                has_prev=search_result['has_prev'],
+                has_next=search_result['has_next']
+            )
+
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card,
+                reply_markup=keyboard
+            )
+
+            await bot.answer_callback_query(query['id'], "Back to search results")
+            logger.info(f"Restored search results for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error in callback_search_back: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], "❌ Error restoring results", show_alert=True)
+
+
+# =============================================================================
+# Statistics Callback Handlers
+# =============================================================================
+
+async def callback_stats_period(query: dict, bot: 'TelegramBot'):
+    """
+    Handle stats_period_{days} callback to switch time period.
+
+    Updates the statistics display with a different time period (7, 30, or 90 days).
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+    callback_data = query['data']
+
+    # Extract period from callback_data (format: stats_period_30)
+    try:
+        period_days = int(callback_data.split('_')[-1])
+    except (ValueError, IndexError):
+        await bot.answer_callback_query(query['id'], "❌ Invalid period", show_alert=True)
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.stats import StatsService
+    from .cards import format_stats_card, create_stats_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    # Show "generating" indicator
+    await bot.answer_callback_query(query['id'], f"📊 Generating {period_days}-day stats...")
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Generate statistics report
+            stats = await StatsService.generate_stats_report(conn, user_id_db, period_days)
+
+            # Format the stats card
+            card_text = format_stats_card(stats, period_days)
+            keyboard = create_stats_keyboard(period_days)
+
+            # Update message
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card_text,
+                reply_markup=keyboard
+            )
+
+            logger.info(f"Updated statistics period to {period_days} days for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error updating stats period for user {user_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            f"❌ Error updating statistics: {str(e)}",
+            show_alert=True
+        )
+
+
+async def callback_stats_refresh(query: dict, bot: 'TelegramBot'):
+    """
+    Handle stats_refresh_{period} callback to refresh statistics.
+
+    Regenerates the statistics report for the current period.
+    """
+    user_id = query['from']['id']
+    chat_id = query['message']['chat']['id']
+    message_id = query['message']['message_id']
+    callback_data = query['data']
+
+    # Extract period from callback_data (format: stats_refresh_30)
+    try:
+        period_days = int(callback_data.split('_')[-1])
+    except (ValueError, IndexError):
+        period_days = 30  # Default
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..services.stats import StatsService
+    from .cards import format_stats_card, create_stats_keyboard
+
+    db_pool = get_asyncpg_pool()
+
+    # Show "refreshing" indicator
+    await bot.answer_callback_query(query['id'], "🔄 Refreshing statistics...")
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Generate statistics report
+            stats = await StatsService.generate_stats_report(conn, user_id_db, period_days)
+
+            # Format the stats card
+            card_text = format_stats_card(stats, period_days)
+            keyboard = create_stats_keyboard(period_days)
+
+            # Update message
+            await bot.edit_message_text(
+                chat_id,
+                message_id,
+                card_text,
+                reply_markup=keyboard
+            )
+
+            logger.info(f"Refreshed statistics for user {user_id} (period: {period_days} days)")
+
+    except Exception as e:
+        logger.error(f"Error refreshing stats for user {user_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(
+            query['id'],
+            f"❌ Error refreshing statistics: {str(e)}",
+            show_alert=True
+        )
+
+
+# =============================================================================
+# Template Management Handlers
+# =============================================================================
+
+async def cmd_templates(message: dict, bot: 'TelegramBot'):
+    """
+    Handle /templates command.
+
+    Usage:
+    - /templates - List all templates
+    - /templates add <name> <content> - Add a new template
+    - /templates delete <name> - Delete a template
+
+    Templates support variable substitution:
+    - {{author}} - Original message author
+    - {{channel}} - Channel name/ID
+    - {{date}} - Current date
+    - {{time}} - Current time
+    """
+    user_id = message['from']['id']
+    text = message.get('text', '')
+    parts = text.split(maxsplit=2)
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.user_dao import UserDAO
+    from ..database.dao.templates_dao import TemplatesDAO
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user from database
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.send_message(user_id, "❌ User not found. Use /start first.")
+                return
+
+            user_id_db = user['id']
+
+            # Command: /templates (list all)
+            if len(parts) == 1:
+                templates = await TemplatesDAO.get_templates(conn, user_id_db, order_by='usage_count')
+
+                if not templates:
+                    help_text = """📝 Quick Reply Templates
+
+You don't have any templates yet.
+
+**Create a template:**
+/templates add <name> <content>
+
+**Examples:**
+/templates add greeting Hello {{author}}! How can I help?
+/templates add rules Please read #rules channel
+/templates add closing Thanks for reaching out!
+
+**Variable substitution:**
+• {{author}} - Original message author
+• {{channel}} - Channel name
+• {{date}} - Current date
+• {{time}} - Current time
+
+Use templates directly from message cards!"""
+
+                    await bot.send_message(user_id, help_text)
+                    return
+
+                # Format template list
+                template_list = "📝 Your Quick Reply Templates\n\n"
+
+                for idx, template in enumerate(templates, 1):
+                    name = template['name']
+                    content = template['content']
+                    usage_count = template['usage_count']
+
+                    # Truncate long content
+                    if len(content) > 80:
+                        content = content[:77] + "..."
+
+                    template_list += f"{idx}. **{name}** (used {usage_count}x)\n"
+                    template_list += f"   _{content}_\n\n"
+
+                template_list += """**Commands:**
+/templates add <name> <content> - Add template
+/templates delete <name> - Delete template
+
+**Variables:** {{author}}, {{channel}}, {{date}}, {{time}}"""
+
+                await bot.send_message(user_id, template_list, parse_mode='Markdown')
+                logger.info(f"Sent template list to user {user_id} ({len(templates)} templates)")
+
+            # Command: /templates add <name> <content>
+            elif len(parts) >= 3 and parts[1].lower() == 'add':
+                # Parse name and content from remaining text
+                remaining_text = text.split(maxsplit=2)[2]  # Everything after "/templates add"
+
+                # Split on first space to get name and content
+                try:
+                    name, content = remaining_text.split(maxsplit=1)
+                except ValueError:
+                    await bot.send_message(
+                        user_id,
+                        "❌ Invalid format. Use: /templates add <name> <content>\n\n"
+                        "Example: /templates add greeting Hello {{author}}!"
+                    )
+                    return
+
+                # Validate name (alphanumeric and underscores only)
+                if not name.replace('_', '').isalnum():
+                    await bot.send_message(
+                        user_id,
+                        "❌ Template name must contain only letters, numbers, and underscores."
+                    )
+                    return
+
+                # Check if template with this name already exists
+                existing = await TemplatesDAO.get_template_by_name(conn, user_id_db, name)
+                if existing:
+                    await bot.send_message(
+                        user_id,
+                        f"❌ Template '{name}' already exists.\n\n"
+                        f"Use /templates delete {name} first, or choose a different name."
+                    )
+                    return
+
+                # Create template
+                template_id = await TemplatesDAO.create_template(conn, user_id_db, name, content)
+
+                # Extract variables from content
+                variables = TemplatesDAO.extract_variables(content)
+                var_info = ""
+                if variables:
+                    var_list = ", ".join(f"{{{{{{var}}}}}}" for var in variables)
+                    var_info = f"\n📌 Variables detected: {var_list}"
+
+                await bot.send_message(
+                    user_id,
+                    f"✅ Template '{name}' created successfully!{var_info}\n\n"
+                    f"Content: {content}\n\n"
+                    f"Use it from message card buttons or type its name when replying.",
+                    parse_mode='Markdown'
+                )
+                logger.info(f"Created template '{name}' (ID: {template_id}) for user {user_id}")
+
+            # Command: /templates delete <name>
+            elif len(parts) >= 3 and parts[1].lower() == 'delete':
+                name = parts[2]
+
+                # Check if template exists
+                existing = await TemplatesDAO.get_template_by_name(conn, user_id_db, name)
+                if not existing:
+                    await bot.send_message(
+                        user_id,
+                        f"❌ Template '{name}' not found.\n\n"
+                        f"Use /templates to see your templates."
+                    )
+                    return
+
+                # Delete template
+                deleted = await TemplatesDAO.delete_template(conn, user_id_db, name)
+
+                if deleted:
+                    await bot.send_message(
+                        user_id,
+                        f"✅ Template '{name}' deleted successfully."
+                    )
+                    logger.info(f"Deleted template '{name}' for user {user_id}")
+                else:
+                    await bot.send_message(user_id, "❌ Failed to delete template.")
+                    logger.error(f"Failed to delete template '{name}' for user {user_id}")
+
+            else:
+                # Invalid subcommand
+                await bot.send_message(
+                    user_id,
+                    "❌ Invalid usage.\n\n"
+                    "**Available commands:**\n"
+                    "/templates - List all templates\n"
+                    "/templates add <name> <content> - Add template\n"
+                    "/templates delete <name> - Delete template\n\n"
+                    "Example: /templates add greeting Hello {{author}}!"
+                )
+
+    except Exception as e:
+        logger.error(f"Error in cmd_templates for user {user_id}: {e}", exc_info=True)
+        await bot.send_message(user_id, f"❌ Error: {str(e)}")
+
+
+async def callback_use_template(query: dict, bot: 'TelegramBot'):
+    """
+    Handle use_template_{template_id} callback.
+
+    Apply a template to the current reply.
+    """
+    user_id = query['from']['id']
+    message = query['message']
+    chat_id = message['chat']['id']
+    data = query['data']
+
+    # Extract template_id from callback data
+    try:
+        template_id = int(data.split('_')[-1])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.answer_callback_query(query['id'], "❌ Invalid template ID")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.templates_dao import TemplatesDAO
+    from ..database.dao.user_dao import UserDAO
+    from datetime import datetime
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Get template
+            template = await TemplatesDAO.get_template_by_id(conn, template_id)
+            if not template:
+                await bot.answer_callback_query(query['id'], "❌ Template not found", show_alert=True)
+                return
+
+            # Verify template belongs to user
+            if template['user_id'] != user_id_db:
+                await bot.answer_callback_query(query['id'], "❌ Access denied", show_alert=True)
+                return
+
+            # Get task_id from user state or message context
+            state_data = bot.get_user_state(user_id)
+
+            if not state_data:
+                await bot.answer_callback_query(
+                    query['id'],
+                    "❌ No active reply. Click 'Ответить' on a message card first.",
+                    show_alert=True
+                )
+                return
+
+            # Get message context for variable substitution
+            task_id = state_data.get('data', {}).get('task_id')
+            if not task_id:
+                await bot.answer_callback_query(query['id'], "❌ Invalid state", show_alert=True)
+                return
+
+            # Fetch task and message for variable substitution
+            task_query = "SELECT * FROM tasks WHERE id = $1"
+            task_row = await conn.fetchrow(task_query, task_id)
+            if not task_row:
+                await bot.answer_callback_query(query['id'], "❌ Task not found", show_alert=True)
+                return
+            task = dict(task_row)
+
+            message_query = "SELECT * FROM messages WHERE id = $1"
+            message_row = await conn.fetchrow(message_query, task['source_message_id'])
+            if not message_row:
+                await bot.answer_callback_query(query['id'], "❌ Message not found", show_alert=True)
+                return
+            msg_data = dict(message_row)
+
+            # Prepare variable substitution
+            now = datetime.utcnow()
+            variables = {
+                'author': msg_data.get('author_name', 'Unknown'),
+                'channel': msg_data.get('channel_id', 'unknown'),
+                'date': now.strftime('%Y-%m-%d'),
+                'time': now.strftime('%H:%M'),
+            }
+
+            # Substitute variables in template content
+            content = TemplatesDAO.substitute_variables(template['content'], variables)
+
+            # Increment usage count
+            await TemplatesDAO.increment_usage(conn, template_id)
+
+            # Send template content as reply prompt
+            await bot.send_message(
+                chat_id,
+                f"📝 Template: **{template['name']}**\n\n"
+                f"{content}\n\n"
+                f"Send your message to confirm, or /cancel to abort.",
+                parse_mode='Markdown'
+            )
+
+            # Update user state with template content as draft
+            state_data['data']['draft_content'] = content
+            bot.set_user_state(user_id, state_data['state'], state_data['data'])
+
+            await bot.answer_callback_query(query['id'], f"✅ Template '{template['name']}' applied")
+            logger.info(f"Applied template {template_id} for user {user_id}")
+
+    except Exception as e:
+        logger.error(f"Error applying template {template_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], f"❌ Error: {str(e)}", show_alert=True)
+
+
+async def callback_template_delete(query: dict, bot: 'TelegramBot'):
+    """
+    Handle template_delete_{template_id} callback.
+
+    Show confirmation dialog before deleting a template.
+    """
+    user_id = query['from']['id']
+    message = query['message']
+    chat_id = message['chat']['id']
+    data = query['data']
+
+    # Extract template_id from callback data
+    try:
+        template_id = int(data.split('_')[-1])
+    except (IndexError, ValueError):
+        logger.error(f"Invalid callback data format: {data}")
+        await bot.answer_callback_query(query['id'], "❌ Invalid template ID")
+        return
+
+    from ..database.connection import get_asyncpg_pool
+    from ..database.dao.templates_dao import TemplatesDAO
+    from ..database.dao.user_dao import UserDAO
+
+    db_pool = get_asyncpg_pool()
+
+    try:
+        async with db_pool.acquire() as conn:
+            # Get user
+            user = await UserDAO.get_user_by_tg_id(conn, user_id)
+            if not user:
+                await bot.answer_callback_query(query['id'], "❌ User not found", show_alert=True)
+                return
+
+            user_id_db = user['id']
+
+            # Get template
+            template = await TemplatesDAO.get_template_by_id(conn, template_id)
+            if not template:
+                await bot.answer_callback_query(query['id'], "❌ Template not found", show_alert=True)
+                return
+
+            # Verify template belongs to user
+            if template['user_id'] != user_id_db:
+                await bot.answer_callback_query(query['id'], "❌ Access denied", show_alert=True)
+                return
+
+            # Delete template
+            deleted = await TemplatesDAO.delete_template_by_id(conn, template_id)
+
+            if deleted:
+                await bot.answer_callback_query(
+                    query['id'],
+                    f"✅ Template '{template['name']}' deleted"
+                )
+                logger.info(f"Deleted template {template_id} for user {user_id}")
+            else:
+                await bot.answer_callback_query(query['id'], "❌ Failed to delete", show_alert=True)
+
+    except Exception as e:
+        logger.error(f"Error deleting template {template_id}: {e}", exc_info=True)
+        await bot.answer_callback_query(query['id'], f"❌ Error: {str(e)}", show_alert=True)
+
+
 # =============================================================================
 # Handler Registration
 # =============================================================================
@@ -2182,6 +4855,24 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_command_handler('/settings', cmd_settings)
     bot.register_command_handler('/cancel', cmd_cancel)
 
+    # Multi-server support command handlers
+    bot.register_command_handler('/servers', cmd_servers)
+    bot.register_command_handler('/channels', cmd_channels)
+    bot.register_command_handler('/bulk_allow', cmd_bulk_allow)
+
+    # Search command handlers
+    bot.register_command_handler('/search', cmd_search)
+    bot.register_command_handler('/search_help', cmd_search_help)
+
+    # Statistics command handlers
+    bot.register_command_handler('/stats', cmd_stats)
+
+    # Export command handlers
+    bot.register_command_handler('/export', cmd_export)
+
+    # Template command handlers
+    bot.register_command_handler('/templates', cmd_templates)
+
     # Callback handlers
     bot.register_callback_handler('reply_', callback_reply)
     bot.register_callback_handler('more_', callback_more)
@@ -2204,6 +4895,38 @@ def register_all_handlers(bot: 'TelegramBot'):
     bot.register_callback_handler('settings_add_channel', callback_settings_add_channel)
     bot.register_callback_handler('settings_remove_channel', callback_settings_remove_channel)
     bot.register_callback_handler('settings_refresh', callback_settings_refresh)
+    bot.register_callback_handler('settings_servers', callback_settings_servers)
+    bot.register_callback_handler('settings_channels', callback_settings_channels)
+
+    # Edit reply callbacks
+    bot.register_callback_handler('edit_reply_', callback_edit_reply)
+    bot.register_callback_handler('confirm_edit_', callback_confirm_edit)
+    bot.register_callback_handler('cancel_edit_', callback_cancel_edit)
+    bot.register_callback_handler('show_history_', callback_show_edit_history)
+
+    # Multi-server support callbacks
+    bot.register_callback_handler('servers_refresh', callback_servers_refresh)
+    bot.register_callback_handler('server_select_', callback_server_select)
+    bot.register_callback_handler('channel_toggle_', callback_channel_toggle)
+    bot.register_callback_handler('bulk_select_server_', callback_bulk_select_server)
+    bot.register_callback_handler('bulk_toggle_', callback_bulk_toggle_channel)
+    bot.register_callback_handler('bulk_confirm_', callback_bulk_confirm)
+    bot.register_callback_handler('bulk_cancel', callback_bulk_cancel)
+
+    # Search callbacks
+    bot.register_callback_handler('search_page_', callback_search_page)
+    bot.register_callback_handler('search_new', callback_search_new)
+    bot.register_callback_handler('search_help', callback_search_help)
+    bot.register_callback_handler('search_example', callback_search_example)
+    bot.register_callback_handler('search_back', callback_search_back)
+
+    # Statistics callbacks
+    bot.register_callback_handler('stats_period_', callback_stats_period)
+    bot.register_callback_handler('stats_refresh_', callback_stats_refresh)
+
+    # Template callbacks
+    bot.register_callback_handler('use_template_', callback_use_template)
+    bot.register_callback_handler('template_delete_', callback_template_delete)
 
     # Message handlers (FSM)
     bot.register_message_handler(handle_fsm_message)

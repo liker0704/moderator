@@ -425,3 +425,243 @@ class AllowlistDAO:
 
         row = await conn.fetchrow(query, *params)
         return row['count'] if row else 0
+
+    @staticmethod
+    async def add_channels_bulk(
+        conn: asyncpg.Connection,
+        user_id: int,
+        server_id: str,
+        channel_ids: List[str],
+    ) -> int:
+        """
+        Add multiple channels to the allowlist at once for a specific server.
+
+        This method performs a bulk insert operation, skipping channels that are
+        already in the allowlist. All channels must belong to the same server_id.
+        Uses INSERT ... ON CONFLICT DO NOTHING to handle duplicates gracefully.
+
+        Args:
+            conn: AsyncPG database connection
+            user_id: User ID who owns this allowlist entry
+            server_id: Server/guild ID (all channels must be from this server)
+            channel_ids: List of channel IDs to add
+
+        Returns:
+            Number of channels actually added (excludes duplicates)
+
+        Raises:
+            asyncpg.PostgresError: On database errors
+
+        Example:
+            >>> # Add multiple Discord channels for a server
+            >>> channels_to_add = ['123456789', '987654321', '555555555']
+            >>> count = await AllowlistDAO.add_channels_bulk(
+            ...     conn=conn,
+            ...     user_id=1,
+            ...     server_id='1111111111',
+            ...     channel_ids=channels_to_add
+            ... )
+            >>> print(f"Added {count} new channels")
+
+        Note:
+            - Empty channel_ids list returns 0
+            - Assumes platform is 'discord' (server_id required)
+            - Channels are enabled by default
+        """
+        # Handle edge case: empty list
+        if not channel_ids:
+            return 0
+
+        # Handle edge case: invalid server_id
+        if not server_id or not server_id.strip():
+            return 0
+
+        # Prepare values for bulk insert
+        now = datetime.utcnow()
+        platform = 'discord'  # Bulk operations are Discord-specific
+
+        # Build the query with ON CONFLICT DO NOTHING to skip duplicates
+        # We need to track how many rows were actually inserted
+        query = """
+            WITH inserted AS (
+                INSERT INTO channels_allowlist (
+                    user_id, platform, server_id, channel_id,
+                    enabled, created_at, updated_at
+                )
+                SELECT $1, $2, $3, unnest($4::text[]), TRUE, $5, $6
+                ON CONFLICT (user_id, platform, channel_id) DO NOTHING
+                RETURNING id
+            )
+            SELECT COUNT(*) as count FROM inserted
+        """
+
+        row = await conn.fetchrow(
+            query,
+            user_id,
+            platform,
+            server_id,
+            channel_ids,
+            now,
+            now,
+        )
+
+        return row['count'] if row else 0
+
+    @staticmethod
+    async def remove_channels_bulk(
+        conn: asyncpg.Connection,
+        user_id: int,
+        channel_ids: List[str],
+    ) -> int:
+        """
+        Remove multiple channels from the allowlist at once.
+
+        This method performs a bulk delete operation, removing all specified
+        channels that belong to the given user.
+
+        Args:
+            conn: AsyncPG database connection
+            user_id: User ID who owns these allowlist entries
+            channel_ids: List of channel IDs to remove
+
+        Returns:
+            Number of channels actually removed
+
+        Raises:
+            asyncpg.PostgresError: On database errors
+
+        Example:
+            >>> # Remove multiple channels from allowlist
+            >>> channels_to_remove = ['123456789', '987654321']
+            >>> count = await AllowlistDAO.remove_channels_bulk(
+            ...     conn=conn,
+            ...     user_id=1,
+            ...     channel_ids=channels_to_remove
+            ... )
+            >>> print(f"Removed {count} channels")
+
+        Note:
+            - Empty channel_ids list returns 0
+            - Only removes channels owned by the specified user_id
+        """
+        # Handle edge case: empty list
+        if not channel_ids:
+            return 0
+
+        query = """
+            DELETE FROM channels_allowlist
+            WHERE user_id = $1
+              AND channel_id = ANY($2::text[])
+        """
+
+        result = await conn.execute(query, user_id, channel_ids)
+
+        # Parse the result string (e.g., "DELETE 3")
+        return int(result.split()[-1])
+
+    @staticmethod
+    async def get_channels_by_server(
+        conn: asyncpg.Connection,
+        user_id: int,
+        server_id: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get all allowlist entries for a specific server.
+
+        Retrieves all channels that belong to a specific Discord server
+        for the given user.
+
+        Args:
+            conn: AsyncPG database connection
+            user_id: User ID who owns these allowlist entries
+            server_id: Server/guild ID to filter by
+
+        Returns:
+            List of dictionaries containing channel information, ordered by created_at ASC.
+            Returns empty list if no channels found or invalid server_id.
+
+        Raises:
+            asyncpg.PostgresError: On database errors
+
+        Example:
+            >>> # Get all allowed channels for a specific server
+            >>> channels = await AllowlistDAO.get_channels_by_server(
+            ...     conn=conn,
+            ...     user_id=1,
+            ...     server_id='1111111111'
+            ... )
+            >>> for channel in channels:
+            ...     print(f"Channel: {channel['channel_id']}, Enabled: {channel['enabled']}")
+
+        Note:
+            - Returns empty list if server_id is empty or None
+            - Includes both enabled and disabled channels
+        """
+        # Handle edge case: invalid server_id
+        if not server_id or not server_id.strip():
+            return []
+
+        query = """
+            SELECT
+                id, user_id, platform, server_id, channel_id,
+                thread_filter_json, enabled, created_at, updated_at
+            FROM channels_allowlist
+            WHERE user_id = $1
+              AND server_id = $2
+            ORDER BY created_at ASC
+        """
+
+        rows = await conn.fetch(query, user_id, server_id)
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_allowlist_stats(
+        conn: asyncpg.Connection,
+        user_id: int,
+    ) -> Dict[str, int]:
+        """
+        Get count of allowed channels grouped by server_id.
+
+        Retrieves statistics showing how many channels are in the allowlist
+        for each server, for a specific user.
+
+        Args:
+            conn: AsyncPG database connection
+            user_id: User ID who owns these allowlist entries
+
+        Returns:
+            Dictionary mapping server_id to channel count.
+            Example: {"server_123": 5, "server_456": 3}
+            Returns empty dict if user has no allowed channels.
+
+        Raises:
+            asyncpg.PostgresError: On database errors
+
+        Example:
+            >>> # Get allowlist statistics per server
+            >>> stats = await AllowlistDAO.get_allowlist_stats(
+            ...     conn=conn,
+            ...     user_id=1
+            ... )
+            >>> for server_id, count in stats.items():
+            ...     print(f"Server {server_id}: {count} channels")
+
+        Note:
+            - Only counts enabled channels
+            - Servers with 0 channels are not included in the result
+            - Returns empty dict if no channels found
+        """
+        query = """
+            SELECT server_id, COUNT(*) as count
+            FROM channels_allowlist
+            WHERE user_id = $1
+              AND enabled = TRUE
+              AND server_id IS NOT NULL
+            GROUP BY server_id
+            ORDER BY count DESC
+        """
+
+        rows = await conn.fetch(query, user_id)
+
+        # Convert to dictionary: {server_id: count}
+        return {row['server_id']: row['count'] for row in rows}

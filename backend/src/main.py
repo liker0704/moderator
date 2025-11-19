@@ -69,6 +69,7 @@ class ModeratorApplication:
         self._discord_task: Optional[asyncio.Task] = None
         self._monitoring_task: Optional[asyncio.Task] = None
         self._health_check_task: Optional[asyncio.Task] = None
+        self._metrics_task: Optional[asyncio.Task] = None
 
         logger.info("ModeratorApplication instance created")
 
@@ -172,13 +173,24 @@ class ModeratorApplication:
             else:
                 logger.warning("Discord configuration not found - Discord integration disabled")
 
-            # 7. Send startup alert
+            # 7. Initialize metrics (if enabled)
+            if self.config.metrics and self.config.metrics.enabled:
+                logger.info("Initializing Prometheus metrics...")
+                from api.metrics import init_metrics
+                environment = "development" if self.config.is_development else "production"
+                init_metrics(version="1.0.0", environment=environment)
+                logger.info("Prometheus metrics initialized")
+            else:
+                logger.info("Prometheus metrics disabled")
+
+            # 8. Send startup alert
             await send_info_alert(
                 "Moderator application starting",
                 context={
-                    "version": "0.1.0-mvp",
+                    "version": "1.0.0",
                     "log_level": self.config.log_level,
-                    "discord_enabled": "Yes" if self.config.discord else "No"
+                    "discord_enabled": "Yes" if self.config.discord else "No",
+                    "metrics_enabled": "Yes" if (self.config.metrics and self.config.metrics.enabled) else "No"
                 }
             )
 
@@ -228,20 +240,34 @@ class ModeratorApplication:
                 name="database_health_monitor"
             )
 
-            # Start Health Check API server
+            # Start Health Check API server (with optional metrics endpoint)
             logger.info("Starting Health Check API server...")
             from api.server import run_health_check_server
             import os
 
             health_check_port = int(os.getenv('HEALTH_CHECK_PORT', '8000'))
+            metrics_enabled = self.config.metrics and self.config.metrics.enabled
             self._health_check_task = asyncio.create_task(
                 run_health_check_server(
                     discord_gateway=self.discord_gateway,
-                    port=health_check_port
+                    port=health_check_port,
+                    metrics_enabled=metrics_enabled
                 ),
                 name="health_check_api"
             )
             logger.info(f"Health Check API server started on port {health_check_port}")
+            if metrics_enabled:
+                logger.info(f"Prometheus metrics endpoint enabled at http://0.0.0.0:{health_check_port}/metrics")
+
+            # Start gauge metrics updater (if metrics enabled)
+            if self.config.metrics and self.config.metrics.enabled:
+                logger.info("Starting gauge metrics updater...")
+                from api.metrics import gauge_metrics_updater
+                self._metrics_task = asyncio.create_task(
+                    gauge_metrics_updater(interval=self.config.metrics.update_interval),
+                    name="metrics_updater"
+                )
+                logger.info(f"Gauge metrics updater started with {self.config.metrics.update_interval}s interval")
 
             # Setup signal handlers for graceful shutdown
             self._setup_signal_handlers()
@@ -330,6 +356,16 @@ class ModeratorApplication:
                     pass
                 logger.info("Database health monitoring stopped")
 
+            # Stop metrics updater
+            if self._metrics_task and not self._metrics_task.done():
+                logger.info("Stopping gauge metrics updater...")
+                self._metrics_task.cancel()
+                try:
+                    await self._metrics_task
+                except asyncio.CancelledError:
+                    pass
+                logger.info("Gauge metrics updater stopped")
+
             # Stop Health Check API server
             if self._health_check_task and not self._health_check_task.done():
                 logger.info("Stopping Health Check API server...")
@@ -394,6 +430,13 @@ class ModeratorApplication:
         if event_type != "MESSAGE_CREATE":
             return
 
+        # Import metrics functions
+        try:
+            from api.metrics import increment_messages, increment_tasks, increment_errors, track_operation
+            metrics_enabled = True
+        except ImportError:
+            metrics_enabled = False
+
         try:
             # Extract data
             channel_id = message_data.get('channel_id')
@@ -413,6 +456,10 @@ class ModeratorApplication:
                     "author_id": author.get('id')
                 }
             )
+
+            # Increment message counter
+            if metrics_enabled:
+                increment_messages('discord')
 
             # 1. Check allowlist
             async with self.db_pool.acquire() as conn:
@@ -486,9 +533,17 @@ class ModeratorApplication:
                     # Create task but mark as muted
                     task_id = await AsyncTaskDAO.create_task(conn, message_id, user_id)
                     await AsyncTaskDAO.update_task_status(conn, task_id, 'muted')
+
+                    # Increment task counter
+                    if metrics_enabled:
+                        increment_tasks('muted')
                     return
 
                 task_id = await AsyncTaskDAO.create_task(conn, message_id, user_id)
+
+                # Increment task counter
+                if metrics_enabled:
+                    increment_tasks('pending')
 
                 # 5. Send card to Telegram
                 await self.send_card_to_telegram(task_id, message_id)
@@ -497,6 +552,10 @@ class ModeratorApplication:
 
         except Exception as e:
             logger.error(f"Error handling Discord message: {e}", exc_info=True)
+
+            # Increment error counter
+            if metrics_enabled:
+                increment_errors('discord')
 
             # Alert on repeated errors
             from services.alerts import send_alert

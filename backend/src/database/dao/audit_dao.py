@@ -23,16 +23,26 @@ class AuditDAO:
         kind: str,
         payload_json: str,
         user_id: Optional[int] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        retention_days: int = 90,
     ) -> int:
         """
-        Log an audit event.
+        Log an audit event with enhanced security tracking.
 
         Args:
             conn: AsyncPG database connection
-            kind: Event type/category (e.g., 'user.login', 'message.received',
-                  'reply.posted', 'discord.connected', 'error.occurred')
+            kind: Event type/category. New v1.0 types include:
+                  Auth: 'auth.login', 'auth.logout', 'auth.failed'
+                  Settings: 'settings.updated', 'allowlist.modified'
+                  Data: 'export.created', 'template.created', 'template.deleted'
+                  Search: 'search.executed', 'data.accessed'
+                  System: 'token.rotated', 'rate_limit.exceeded'
             payload_json: JSON string with event details
             user_id: User ID associated with the event (optional)
+            ip_address: IP address of the request origin (optional, v1.0+)
+            user_agent: User agent string for API calls (optional, v1.0+)
+            retention_days: Number of days to retain this log (default: 90, v1.0+)
 
         Returns:
             int: ID of the created audit log entry
@@ -44,19 +54,24 @@ class AuditDAO:
             >>> import json
             >>> payload = json.dumps({
             ...     "action": "login",
-            ...     "ip_address": "192.168.1.1",
-            ...     "user_agent": "TelegramBot/1.0"
+            ...     "method": "telegram",
+            ...     "success": True
             ... })
             >>> log_id = await AuditDAO.log_event(
             ...     conn=conn,
-            ...     kind='user.login',
+            ...     kind='auth.login',
             ...     payload_json=payload,
-            ...     user_id=1
+            ...     user_id=1,
+            ...     ip_address="192.168.1.1",
+            ...     user_agent="TelegramBot/1.0"
             ... )
         """
         query = """
-            INSERT INTO audit_log (kind, user_id, payload_json, created_at)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO audit_log (
+                kind, user_id, payload_json, ip_address, user_agent,
+                retention_days, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING id
         """
 
@@ -65,6 +80,9 @@ class AuditDAO:
             kind,
             user_id,
             payload_json,
+            ip_address,
+            user_agent,
+            retention_days,
             datetime.utcnow(),
         )
 
@@ -461,3 +479,231 @@ class AuditDAO:
         search_pattern = f'%{search_term}%'
         rows = await conn.fetch(query, search_pattern, limit)
         return [dict(row) for row in rows]
+
+    @staticmethod
+    async def cleanup_old_logs(
+        conn: asyncpg.Connection,
+    ) -> int:
+        """
+        Clean up old audit logs based on retention policy (v1.0+).
+
+        This method uses the PostgreSQL function created in migration 009
+        to delete logs older than their configured retention period.
+
+        Args:
+            conn: AsyncPG database connection
+
+        Returns:
+            Number of logs deleted
+
+        Example:
+            >>> deleted = await AuditDAO.cleanup_old_logs(conn)
+            >>> print(f"Cleaned up {deleted} old audit log entries")
+        """
+        query = "SELECT cleanup_old_audit_logs()"
+        row = await conn.fetchrow(query)
+        return row[0] if row else 0
+
+    @staticmethod
+    async def get_failed_auth_attempts(
+        conn: asyncpg.Connection,
+        hours: int = 24,
+        min_attempts: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent failed authentication attempts grouped by IP (v1.0+).
+
+        Useful for detecting brute force attacks and suspicious activity.
+
+        Args:
+            conn: AsyncPG database connection
+            hours: Look back this many hours (default: 24)
+            min_attempts: Minimum attempts to include (default: 3)
+
+        Returns:
+            List of dictionaries with IP address, attempt count, and details
+
+        Example:
+            >>> attempts = await AuditDAO.get_failed_auth_attempts(
+            ...     conn, hours=1, min_attempts=5
+            ... )
+            >>> for attempt in attempts:
+            ...     print(f"IP {attempt['ip_address']}: {attempt['attempt_count']} failed attempts")
+        """
+        query = """
+            SELECT
+                ip_address,
+                user_agent,
+                COUNT(*) as attempt_count,
+                MAX(created_at) as last_attempt,
+                ARRAY_AGG(DISTINCT user_id) as attempted_user_ids,
+                ARRAY_AGG(payload_json ORDER BY created_at DESC) as payloads
+            FROM audit_log
+            WHERE kind = 'auth.failed'
+                AND created_at > NOW() - INTERVAL '1 hour' * $1
+                AND ip_address IS NOT NULL
+            GROUP BY ip_address, user_agent
+            HAVING COUNT(*) >= $2
+            ORDER BY attempt_count DESC, last_attempt DESC
+        """
+
+        rows = await conn.fetch(query, hours, min_attempts)
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_logs_by_ip(
+        conn: asyncpg.Connection,
+        ip_address: str,
+        limit: int = 100,
+        since: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve audit logs from a specific IP address (v1.0+).
+
+        Useful for investigating suspicious activity from a particular source.
+
+        Args:
+            conn: AsyncPG database connection
+            ip_address: IP address to filter by
+            limit: Maximum number of logs to return (default: 100)
+            since: Only get logs created after this timestamp (optional)
+
+        Returns:
+            List of log dictionaries ordered by created_at DESC
+
+        Example:
+            >>> from datetime import datetime, timedelta
+            >>> yesterday = datetime.utcnow() - timedelta(days=1)
+            >>> logs = await AuditDAO.get_logs_by_ip(
+            ...     conn, ip_address="192.168.1.100", since=yesterday
+            ... )
+        """
+        if since:
+            query = """
+                SELECT id, kind, user_id, payload_json, ip_address,
+                       user_agent, created_at
+                FROM audit_log
+                WHERE ip_address = $1 AND created_at >= $2
+                ORDER BY created_at DESC
+                LIMIT $3
+            """
+            rows = await conn.fetch(query, ip_address, since, limit)
+        else:
+            query = """
+                SELECT id, kind, user_id, payload_json, ip_address,
+                       user_agent, created_at
+                FROM audit_log
+                WHERE ip_address = $1
+                ORDER BY created_at DESC
+                LIMIT $2
+            """
+            rows = await conn.fetch(query, ip_address, limit)
+
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def get_security_events(
+        conn: asyncpg.Connection,
+        hours: int = 24,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent security-related events (v1.0+).
+
+        Returns authentication failures, rate limit violations, and other
+        security events for monitoring and alerting.
+
+        Args:
+            conn: AsyncPG database connection
+            hours: Look back this many hours (default: 24)
+            limit: Maximum number of events to return (default: 100)
+
+        Returns:
+            List of security event dictionaries ordered by created_at DESC
+
+        Example:
+            >>> events = await AuditDAO.get_security_events(conn, hours=1)
+            >>> for event in events:
+            ...     print(f"{event['kind']}: {event['created_at']}")
+        """
+        query = """
+            SELECT id, kind, user_id, payload_json, ip_address,
+                   user_agent, created_at
+            FROM audit_log
+            WHERE kind IN (
+                'auth.failed',
+                'auth.logout',
+                'rate_limit.exceeded',
+                'token.rotated',
+                'export.created',
+                'data.accessed'
+            )
+            AND created_at > NOW() - INTERVAL '1 hour' * $1
+            ORDER BY created_at DESC
+            LIMIT $2
+        """
+
+        rows = await conn.fetch(query, hours, limit)
+        return [dict(row) for row in rows]
+
+    @staticmethod
+    async def log_auth_event(
+        conn: asyncpg.Connection,
+        success: bool,
+        user_id: Optional[int] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        method: str = "telegram",
+        error_message: Optional[str] = None,
+    ) -> int:
+        """
+        Convenience method for logging authentication events (v1.0+).
+
+        Args:
+            conn: AsyncPG database connection
+            success: Whether authentication succeeded
+            user_id: User ID (optional, may not be known if failed)
+            ip_address: IP address of the request
+            user_agent: User agent string
+            method: Authentication method (e.g., 'telegram', 'api')
+            error_message: Error message if authentication failed
+
+        Returns:
+            int: ID of the created audit log entry
+
+        Example:
+            >>> # Successful login
+            >>> await AuditDAO.log_auth_event(
+            ...     conn, success=True, user_id=1,
+            ...     ip_address="192.168.1.1", method="telegram"
+            ... )
+            >>>
+            >>> # Failed login
+            >>> await AuditDAO.log_auth_event(
+            ...     conn, success=False,
+            ...     ip_address="192.168.1.100",
+            ...     error_message="Invalid credentials"
+            ... )
+        """
+        import json
+
+        kind = 'auth.login' if success else 'auth.failed'
+
+        payload = {
+            "method": method,
+            "success": success,
+        }
+        if error_message:
+            payload["error"] = error_message
+
+        payload_json = json.dumps(payload)
+
+        return await AuditDAO.log_event(
+            conn=conn,
+            kind=kind,
+            payload_json=payload_json,
+            user_id=user_id,
+            ip_address=ip_address,
+            user_agent=user_agent,
+            retention_days=365 if not success else 90,  # Keep failed attempts longer
+        )

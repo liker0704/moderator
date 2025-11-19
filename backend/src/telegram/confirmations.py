@@ -188,6 +188,72 @@ class ConfirmationBuilder:
         )
 
     @staticmethod
+    def create_edit_confirmation(
+        original_text: str,
+        new_text: str,
+        new_reply_id: int
+    ) -> ConfirmationDialog:
+        """
+        Create a confirmation dialog for editing a reply.
+
+        Shows both original and new text for comparison, with statistics
+        about the changes made.
+
+        Args:
+            original_text: Original reply text
+            new_text: New edited text
+            new_reply_id: ID of the new (edited) reply record
+
+        Returns:
+            ConfirmationDialog configured for edit action
+
+        Example:
+            >>> dialog = ConfirmationBuilder.create_edit_confirmation(
+            ...     original_text="Original message content here",
+            ...     new_text="Modified message content here with changes",
+            ...     new_reply_id=12345
+            ... )
+        """
+        # Truncate long texts for preview
+        orig_preview = original_text[:150] + ('...' if len(original_text) > 150 else '')
+        new_preview = new_text[:150] + ('...' if len(new_text) > 150 else '')
+
+        # Calculate text changes
+        orig_length = len(original_text)
+        new_length = len(new_text)
+        length_diff = new_length - orig_length
+        diff_indicator = f"+{length_diff}" if length_diff > 0 else str(length_diff)
+
+        message = "Replace the original message on the platform with this new version?"
+
+        details = (
+            f"**Original Text:**\n{orig_preview}\n\n"
+            f"**New Text:**\n{new_preview}\n\n"
+            f"**Changes:**\n"
+            f"• Original length: {orig_length} chars\n"
+            f"• New length: {new_length} chars\n"
+            f"• Difference: {diff_indicator} chars\n\n"
+            f"Edit history will be saved for audit purposes."
+        )
+
+        return ConfirmationDialog(
+            title="✏️ Confirm Edit",
+            message=message,
+            details=details,
+            warning=None,
+            confirm_text="✅ Confirm Edit",
+            cancel_text="❌ Cancel",
+            confirm_callback=f"confirm_edit_{new_reply_id}",
+            cancel_callback=f"cancel_edit_{new_reply_id}",
+            metadata={
+                "action": "edit",
+                "reply_id": new_reply_id,
+                "original_length": orig_length,
+                "new_length": new_length
+            }
+        )
+
+    @staticmethod
     def format_confirmation(dialog: ConfirmationDialog) -> tuple[str, dict]:
         """
         Format a ConfirmationDialog for Telegram display.
@@ -285,3 +351,38 @@ def create_dnd_toggle_confirmation(current_state: bool) -> ConfirmationDialog:
         effects=effects,
         feature_id="dnd"
     )
+
+
+def create_edit_confirmation(
+    original_text: str,
+    new_text: str,
+    new_reply_id: int
+) -> tuple[str, dict]:
+    """
+    Create and format a confirmation dialog for editing a reply.
+
+    This is a convenience function that creates an edit confirmation
+    and immediately formats it for Telegram display.
+
+    Args:
+        original_text: Original reply text
+        new_text: New edited text
+        new_reply_id: ID of the new (edited) reply record
+
+    Returns:
+        Tuple of (formatted_text, inline_keyboard_dict) ready for Telegram
+
+    Example:
+        >>> text, keyboard = create_edit_confirmation(
+        ...     original_text="Original message",
+        ...     new_text="Edited message",
+        ...     new_reply_id=12345
+        ... )
+        >>> await bot.send_message(chat_id, text, reply_markup=keyboard)
+    """
+    dialog = ConfirmationBuilder.create_edit_confirmation(
+        original_text=original_text,
+        new_text=new_text,
+        new_reply_id=new_reply_id
+    )
+    return ConfirmationBuilder.format_confirmation(dialog)

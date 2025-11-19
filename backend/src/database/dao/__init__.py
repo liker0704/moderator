@@ -15,6 +15,8 @@ Available DAOs:
 - AttachmentDAO: Attachment operations (attachments table)
 - AuditDAO: Audit log operations (audit_log table)
 - AIVariantDAO: AI response variant operations (ai_response_variants table)
+- ChannelDAO: Discord channel caching operations (discord_channels table)
+- SearchDAO: Message search operations with advanced filtering (messages table)
 
 Usage:
     from database.dao import MessageDAO, TaskDAO, UserDAO
@@ -56,6 +58,8 @@ from .allowlist_dao import AllowlistDAO
 from .attachment_dao import AttachmentDAO
 from .audit_dao import AuditDAO
 from .ai_variant_dao import AIVariantDAO
+from .channel_dao import ChannelDAO
+from .search_dao import SearchDAO
 
 __all__ = [
     'MessageDAO',
@@ -67,6 +71,8 @@ __all__ = [
     'AttachmentDAO',
     'AuditDAO',
     'AIVariantDAO',
+    'ChannelDAO',
+    'SearchDAO',
 ]
 
 # DAO method summary
@@ -176,6 +182,17 @@ DAO_SUMMARY = {
         'delete_variants_for_task',
         'delete_variant',
         'count_variants_for_task',
+    ],
+    'ChannelDAO': [
+        'cache_channel',
+        'get_channels_by_server',
+        'get_channel_by_id',
+        'bulk_update_channels',
+    ],
+    'SearchDAO': [
+        'search_messages',
+        'count_search_results',
+        'search_messages_fulltext',
     ],
 }
 

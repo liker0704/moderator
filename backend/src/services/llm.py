@@ -89,6 +89,19 @@ class LLMClient:
             # Don't let tracking errors break the main flow
             logger.warning(f"Failed to track LLM request: {e}")
 
+        # Track metrics if available
+        try:
+            from api.metrics import increment_llm_requests, observe_response_time, increment_errors
+            increment_llm_requests(provider, status)
+            observe_response_time('llm_request', duration_ms / 1000.0)  # Convert to seconds
+            if status == 'error':
+                increment_errors('llm')
+        except ImportError:
+            # Metrics not available
+            pass
+        except Exception as e:
+            logger.warning(f"Failed to track LLM metrics: {e}")
+
     async def generate_response(
         self,
         message_context: str,
